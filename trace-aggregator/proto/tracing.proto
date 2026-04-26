@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package tracing;
+
+// A single causally-tagged event from an agent.
+message AgentSpan {
+    string trace_id = 1;
+    string span_id = 2;
+    string parent_span_id = 3;        // empty string if root
+    string agent_id = 4;
+
+    // Vector clock: agent_id -> logical counter.
+    // Used by the Causal Engine to reconstruct happens-before
+    // relationships when spans arrive out of order or in parallel.
+    map<string, uint32> vector_clock = 5;
+
+    // "llm_call" | "tool_use" | "agent_handoff" | "error"
+    string event_type = 6;
+
+    uint32 input_tokens = 7;
+    uint32 output_tokens = 8;
+    uint32 latency_ms = 9;
+
+    // Wall-clock start time as unix millis. The collector also stamps
+    // ingestion time, but agent-side clocks are useful for the timeline UI.
+    uint64 start_time_ms = 10;
+
+    // Free-form JSON: prompts, tool args, error stacks. Capped in the SDK.
+    string metadata = 11;
+}
+
+message DecisionCandidate {
+    string candidate_id = 1;
+    string candidate_type = 2; // "agent" | "tool" | "branch"
+    double score = 3;
+    string reason = 4;
+}
+
+message DecisionEvent {
+    string trace_id = 1;
+    string decision_id = 2;
+    string source_span_id = 3;
+    string actor_agent_id = 4;
+    string decision_type = 5; // "agent_handoff" | "tool_select" | "route_branch"
+    string selected_candidate_id = 6;
+    double confidence = 7;
+    string rationale_summary = 8;
+    repeated string evidence_refs = 9;
+    repeated DecisionCandidate candidates = 10;
+    uint64 timestamp_ms = 11;
+    string metadata = 12;
+}
+
+message SpanResponse {
+    bool success = 1;
+    string message = 2;
+    uint32 spans_received = 3;
+}
+
+message DecisionResponse {
+    bool success = 1;
+    string message = 2;
+    uint32 decisions_received = 3;
+}
+
+service TraceCollector {
+    // Single span — used during development, simple to reason about.
+    rpc RecordSpan(AgentSpan) returns (SpanResponse);
+
+    // Streaming — used in production / load tests for high throughput.
+    rpc StreamSpans(stream AgentSpan) returns (SpanResponse);
+
+    // Single decision event emitted by orchestrators/routing nodes.
+    rpc RecordDecision(DecisionEvent) returns (DecisionResponse);
+
+    // Streaming decision events for high-throughput ingestion.
+    rpc StreamDecisions(stream DecisionEvent) returns (DecisionResponse);
+}

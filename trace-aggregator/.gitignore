@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Generated proto stubs (rebuild from proto/)
+generated/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+
+# Docker volume
+clickhouse_data/

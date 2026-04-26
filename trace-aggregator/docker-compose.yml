@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    container_name: trace_aggregator_db
+    ports:
+      - "8123:8123"   # HTTP interface (used by clickhouse-connect / FastAPI)
+      - "9000:9000"   # Native TCP interface
+    environment:
+      CLICKHOUSE_DB: tracing
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  clickhouse_data:

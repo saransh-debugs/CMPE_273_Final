@@ -1,0 +1,18 @@
+# Core
+grpcio==1.66.2
+grpcio-tools==1.66.2
+protobuf==5.28.2
+
+# DB
+clickhouse-connect==0.7.19
+
+# API
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+
+# Agent demo
+langgraph==0.2.34
+langchain-core==0.3.10
+
+# Misc
+python-dotenv==1.0.1
