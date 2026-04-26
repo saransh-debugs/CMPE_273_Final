@@ -15,17 +15,21 @@ export function TraceListPage() {
 
   useEffect(() => {
     let cancel = false;
-    setLoading(true);
-    setError(null);
     const hasErrors = filter === "errors" ? true : filter === "clean" ? false : undefined;
-    api
-      .listTraces(50, hasErrors)
-      .then((rows) => !cancel && setTraces(rows))
-      .catch((e) => !cancel && setError(String(e)))
-      .finally(() => !cancel && setLoading(false));
-    return () => {
-      cancel = true;
+
+    const fetch = () => {
+      setLoading((prev) => (prev ? true : false)); // only show spinner on first load
+      setError(null);
+      api
+        .listTraces(50, hasErrors)
+        .then((rows) => { if (!cancel) { setTraces(rows); setLoading(false); } })
+        .catch((e) => { if (!cancel) { setError(String(e)); setLoading(false); } });
     };
+
+    setLoading(true);
+    fetch();
+    const interval = setInterval(fetch, 5000);
+    return () => { cancel = true; clearInterval(interval); };
   }, [filter]);
 
   return (
@@ -64,8 +68,14 @@ export function TraceListPage() {
             </button>
           ))}
         </div>
-        <div className="font-mono text-[11px] text-cream-500">
+        <div className="flex items-center gap-2 font-mono text-[11px] text-cream-500">
           {loading ? "loading…" : `${traces.length} traces`}
+          {!loading && (
+            <span className="flex items-center gap-1 text-sage">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-sage animate-pulse" />
+              live
+            </span>
+          )}
         </div>
       </div>
 

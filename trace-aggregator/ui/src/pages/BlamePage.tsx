@@ -59,8 +59,20 @@ export function BlamePage() {
       </div>
 
       {error && (
-        <div className="hairline rounded-sm bg-cherry/10 border-cherry/40 p-4 text-cherry-light font-mono text-[12px]">
-          {error}
+        <div className="hairline rounded-sm bg-cherry/10 border-cherry/40 p-4 text-cherry-light font-mono text-[12px] mb-6">
+          API error: {error}. Is the FastAPI server running on :8000?
+        </div>
+      )}
+
+      {!error && rows.length === 0 && (
+        <div className="hairline rounded-sm p-12 text-center">
+          <div className="font-display italic text-[20px] text-cream-300 mb-2">
+            No agent data yet.
+          </div>
+          <div className="font-mono text-[12px] text-cream-500">
+            Run <span className="text-cream-100">python -m demo.pipeline</span> to
+            emit some traces.
+          </div>
         </div>
       )}
 

@@ -11,8 +11,16 @@ from typing import Optional
 
 import clickhouse_connect
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Trace Aggregator API", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:4173"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
 
 
 def _client():

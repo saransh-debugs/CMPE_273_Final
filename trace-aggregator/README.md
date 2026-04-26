@@ -80,11 +80,12 @@ FastAPI query layer (port 8000) ──▶ UI (Vite, port 5173)
 | Directory     | What lives here                                              | Suggested owner |
 |---------------|--------------------------------------------------------------|-----------------|
 | `proto/`      | The shared `.proto` contract — single source of truth        | shared          |
-| `db/`         | ClickHouse schema init (`init_db.py`)                         | shared          |
+| `db/`         | ClickHouse schema init (`init_db.py`)                        | shared          |
 | `sdk/`        | `@instrument_node` decorator + non-blocking gRPC client      | Person 1        |
 | `collector/`  | Async gRPC server + batch ClickHouse writer                  | Person 2        |
 | `engine/`     | Vector clock DAG reconstruction + blame computation          | Person 3        |
-| `api/`        | FastAPI query API (reads ClickHouse)                         | Person 4        |
+| `api/`        | FastAPI query API (reads ClickHouse, CORS enabled)           | Person 4        |
+| `ui/`         | Vite + React + Tailwind dashboard (Timeline, DAG, Blame, Decisions) | Person 5 |
 | `demo/`       | Runnable 4-agent LangGraph that exercises the whole pipeline | shared          |
 
 ## How it actually works
@@ -133,7 +134,17 @@ Decision events are first-class records (`DecisionEvent`) emitted by orchestrato
 - `/traces/{trace_id}/decisions`
 - `/traces/{trace_id}/root-cause`
 
-In the UI, these appear in the **Decision Chain** panel on the trace detail page.
+In the UI, these appear in the **Decision Chain** panel on the trace detail page — collapsible cards per decision showing agent, type, rationale, candidates with pros/cons, confidence, and evidence refs. The **Root-cause** tab ranks decisions by their downstream latency, token, and error impact.
+
+### 5. UI dashboard
+
+A Vite + React + TypeScript + Tailwind frontend at `ui/`. Three pages:
+
+- **Traces** — live-polling list (refreshes every 5s) with all/errors/clean filter
+- **Trace detail** — Timeline waterfall, causal DAG tree, Decision Chain panel, per-agent Blame panel
+- **Blame ledger** — cross-trace agent leaderboard with 1h / 6h / 24h / 7d time window
+
+The Vite dev server proxies `/api/*` to FastAPI on `:8000` so no CORS config is needed in development. CORS is also enabled on the FastAPI side for the Vite origins (`:5173`, `:4173`) for production builds.
 
 ## Development
 
@@ -161,7 +172,7 @@ docker compose down -v   # nukes the ClickHouse volume too
 - [x] Phase 2 — gRPC collector with batch writer
 - [x] Phase 3 — SDK `@instrument_node` for LangGraph
 - [x] Phase 4 — Causal engine: vector clock DAG + blame
-- [x] Phase 5 — FastAPI query layer
-- [ ] Phase 5b — UI: Trace Timeline (waterfall), DAG view, Blame leaderboard
+- [x] Phase 5 — FastAPI query layer (with CORS)
+- [x] Phase 5b — UI: Timeline waterfall, DAG view, Blame leaderboard, Decision Chain panel
 - [ ] Phase 6 — Alerting on stuck agents / runaway token usage
 - [ ] Phase 7 — Load test (simulate 100s of concurrent traces)
