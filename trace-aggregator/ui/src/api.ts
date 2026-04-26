@@ -1,7 +1,6 @@
 import type {
   TraceSummary,
   TraceDetail,
-  RawSpan,
   GlobalBlameRow,
   DecisionEvent,
   RootCauseEdge,
@@ -26,7 +25,6 @@ export const api = {
     return get<TraceSummary[]>(`/traces?${params}`);
   },
   getTrace: (id: string) => get<TraceDetail>(`/traces/${id}`),
-  getRawSpans: (id: string) => get<RawSpan[]>(`/traces/${id}/spans`),
   getDecisions: (id: string) =>
     get<DecisionEvent[]>(`/traces/${id}/decisions`),
   getRootCause: (id: string) =>

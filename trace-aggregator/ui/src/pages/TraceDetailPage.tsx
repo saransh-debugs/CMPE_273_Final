@@ -140,7 +140,7 @@ export function TraceDetailPage() {
             subtitle="Agent choices and their downstream causal impact."
           >
             <DecisionPanel
-              decisions={data.decisions}
+              decisions={data.decisions ?? []}
               rootCause={rootCause}
             />
           </Panel>

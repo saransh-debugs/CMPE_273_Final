@@ -75,10 +75,12 @@ export interface GlobalBlameRow {
 
 export interface DecisionCandidate {
   candidate_id: string;
-  description: string;
+  description?: string;
+  candidate_type?: string;
   score: number;
-  pros: string[];
-  cons: string[];
+  reason?: string;
+  pros?: string[];
+  cons?: string[];
 }
 
 export interface DecisionEvent {

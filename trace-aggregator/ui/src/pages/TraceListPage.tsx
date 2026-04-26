@@ -57,6 +57,7 @@ export function TraceListPage() {
           {(["all", "errors", "clean"] as const).map((f) => (
             <button
               key={f}
+              type="button"
               onClick={() => setFilter(f)}
               className={`px-4 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-colors ${
                 filter === f

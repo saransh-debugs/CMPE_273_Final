@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef } from "react";
 import type { DAGNode } from "../types";
 import { agentColor, fmtMs, shortId } from "../utils/format";
 
@@ -21,6 +21,8 @@ const AXIS_HEIGHT = 24;
  */
 export function TimelineWaterfall({ nodes }: Props) {
   const [hovered, setHovered] = useState<string | null>(null);
+  const [mouse, setMouse] = useState({ x: 0, y: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const { rows, span, t0, totalMs, ticks } = useMemo(() => {
     if (nodes.length === 0) {
@@ -56,7 +58,14 @@ export function TimelineWaterfall({ nodes }: Props) {
     LEFT_LABEL_WIDTH + (ms / totalMs) * plotWidth;
 
   return (
-    <div className="relative w-full overflow-x-auto">
+    <div
+      ref={containerRef}
+      className="relative w-full overflow-x-auto"
+      onMouseMove={(e) => {
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (rect) setMouse({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+      }}
+    >
       <svg
         viewBox={`0 0 ${totalWidth} ${height}`}
         className="w-full"
@@ -184,12 +193,20 @@ export function TimelineWaterfall({ nodes }: Props) {
         })}
       </svg>
 
-      {/* Hover detail */}
+      {/* Hover detail — follows cursor */}
       {hovered && (() => {
         const n = rows.find((r) => r.span_id === hovered);
         if (!n) return null;
+        const containerWidth = containerRef.current?.offsetWidth ?? 800;
+        const tooltipWidth = 288; // w-72
+        const flipX = mouse.x + tooltipWidth + 16 > containerWidth;
+        const left = flipX ? mouse.x - tooltipWidth - 8 : mouse.x + 16;
+        const top = Math.max(0, mouse.y - 8);
         return (
-          <div className="absolute top-0 right-0 hairline bg-ink-700 p-4 rounded-sm w-72 text-[12px] font-mono shadow-xl pointer-events-none">
+          <div
+            className="absolute hairline bg-ink-700 p-4 rounded-sm w-72 text-[12px] font-mono shadow-xl pointer-events-none z-10"
+            style={{ left, top }}
+          >
             <div className="eyebrow mb-2">Span detail</div>
             <Row k="agent" v={n.agent_id} accent />
             <Row k="span_id" v={shortId(n.span_id)} />

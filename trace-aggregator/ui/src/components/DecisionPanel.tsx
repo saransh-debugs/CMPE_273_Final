@@ -25,6 +25,7 @@ export function DecisionPanel({ decisions, rootCause }: Props) {
         {(["decisions", "root-cause"] as const).map((t) => (
           <button
             key={t}
+            type="button"
             onClick={() => setTab(t)}
             className={`px-4 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-colors ${
               tab === t
@@ -71,6 +72,7 @@ function DecisionCard({ d }: { d: DecisionEvent }) {
     <div className="hairline rounded-sm bg-ink-700/40 overflow-hidden">
       {/* Header row */}
       <button
+        type="button"
         onClick={() => setOpen((v) => !v)}
         className="w-full text-left px-4 py-3 hover:bg-ink-700/70 transition-colors"
       >
@@ -134,7 +136,7 @@ function DecisionCard({ d }: { d: DecisionEvent }) {
                     >
                       <div className="flex items-center justify-between mb-1">
                         <span className="font-mono text-[12px] text-cream-50">
-                          {cand.description || cand.candidate_id}
+                          {cand.description || cand.reason || cand.candidate_id}
                         </span>
                         <div className="flex items-center gap-2">
                           {isSelected && (
@@ -147,26 +149,26 @@ function DecisionCard({ d }: { d: DecisionEvent }) {
                           </span>
                         </div>
                       </div>
-                      {(cand.pros.length > 0 || cand.cons.length > 0) && (
+                      {((cand.pros?.length ?? 0) > 0 || (cand.cons?.length ?? 0) > 0) && (
                         <div className="grid grid-cols-2 gap-3 mt-1.5">
-                          {cand.pros.length > 0 && (
+                          {(cand.pros?.length ?? 0) > 0 && (
                             <div>
                               <div className="font-mono text-[9px] uppercase tracking-wider text-sage mb-0.5">
                                 pros
                               </div>
-                              {cand.pros.map((p, i) => (
+                              {cand.pros!.map((p, i) => (
                                 <div key={i} className="font-mono text-[10px] text-cream-300">
                                   + {p}
                                 </div>
                               ))}
                             </div>
                           )}
-                          {cand.cons.length > 0 && (
+                          {(cand.cons?.length ?? 0) > 0 && (
                             <div>
                               <div className="font-mono text-[9px] uppercase tracking-wider text-cherry mb-0.5">
                                 cons
                               </div>
-                              {cand.cons.map((c, i) => (
+                              {cand.cons!.map((c, i) => (
                                 <div key={i} className="font-mono text-[10px] text-cream-300">
                                   − {c}
                                 </div>

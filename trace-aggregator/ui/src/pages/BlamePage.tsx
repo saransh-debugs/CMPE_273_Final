@@ -7,11 +7,16 @@ import { fmtMs, fmtTokens, agentColor } from "../utils/format";
 export function BlamePage() {
   const [rows, setRows] = useState<GlobalBlameRow[]>([]);
   const [hours, setHours] = useState(24);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    setLoading(true);
     setError(null);
-    api.globalBlame(hours).then(setRows).catch((e) => setError(String(e)));
+    api
+      .globalBlame(hours)
+      .then((data) => { setRows(data); setLoading(false); })
+      .catch((e) => { setError(String(e)); setLoading(false); });
   }, [hours]);
 
   // Keep denominator stable even before data loads (or if all latencies are 0).
@@ -42,6 +47,7 @@ export function BlamePage() {
           {[1, 6, 24, 168].map((h) => (
             <button
               key={h}
+              type="button"
               onClick={() => setHours(h)}
               className={`px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-colors ${
                 hours === h
@@ -54,7 +60,7 @@ export function BlamePage() {
           ))}
         </div>
         <div className="font-mono text-[11px] text-cream-500">
-          {rows.length} agents
+          {loading ? "loading…" : `${rows.length} agents`}
         </div>
       </div>
 
@@ -64,7 +70,7 @@ export function BlamePage() {
         </div>
       )}
 
-      {!error && rows.length === 0 && (
+      {!error && !loading && rows.length === 0 && (
         <div className="hairline rounded-sm p-12 text-center">
           <div className="font-display italic text-[20px] text-cream-300 mb-2">
             No agent data yet.
