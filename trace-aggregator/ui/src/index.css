@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-ink-900 text-cream-50 font-sans antialiased;
+    /* Subtle film-grain via radial noise — gives the page atmosphere */
+    background-image:
+      radial-gradient(circle at 20% 0%, rgba(199, 62, 29, 0.04) 0%, transparent 40%),
+      radial-gradient(circle at 80% 100%, rgba(217, 147, 58, 0.03) 0%, transparent 40%);
+    background-attachment: fixed;
+  }
+
+  ::selection {
+    @apply bg-cherry/30 text-cream-50;
+  }
+
+  /* Custom scrollbar — keeps the editorial feel */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-ink-500 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-cream-700;
+  }
+}
+
+@layer components {
+  /* The hairline — used everywhere for borders */
+  .hairline {
+    @apply border border-ink-500/60;
+  }
+  .hairline-b {
+    @apply border-b border-ink-500/60;
+  }
+  .hairline-t {
+    @apply border-t border-ink-500/60;
+  }
+
+  /* Pill / tag */
+  .tag {
+    @apply inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-mono uppercase tracking-tighter text-cream-300 hairline rounded-full;
+  }
+
+  /* Eyebrow text — small caps label above section headers */
+  .eyebrow {
+    @apply text-[11px] font-mono uppercase tracking-[0.18em] text-cream-500;
+  }
+}
