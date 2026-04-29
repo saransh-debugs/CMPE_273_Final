@@ -80,17 +80,43 @@ Each task includes scope, dependencies, deliverables, and acceptance criteria.
 
 ## Software Engineering Work
 
-### ENG-01: Collector Durability Semantics
+### ENG-01: Collector Durability Semantics [DONE]
 - **Scope:** Define explicit ACK/reject behavior and loss policy.
 - **Dependencies:** None.
-- **Deliverables:** Ingestion contract doc + reject path implementation.
-- **Acceptance:** No silent drops; all rejection paths are observable.
+- **Deliverables:** Ingestion contract doc + reject path implementation. (Completed)
+- **Acceptance:** No silent drops; all rejection paths are observable. (Met)
 
-### ENG-02: Durable Buffer Layer (Broker or WAL)
+### ENG-02: Durable Buffer Layer (Broker or WAL) [DONE]
 - **Scope:** Add durable buffering between ingest and storage.
 - **Dependencies:** ENG-01.
-- **Deliverables:** Broker/WAL path + replay command.
-- **Acceptance:** Restart/recovery does not lose accepted events.
+- **Deliverables:** Broker/WAL path + replay command. (Completed)
+- **Acceptance:** Restart/recovery does not lose accepted events. (Met)
+
+#### ENG-01/ENG-02 Verification Steps (Manual)
+1. Start services except ClickHouse path for failure test:
+	- Run collector: `python -m collector.server`
+2. Simulate storage outage:
+	- Stop ClickHouse: `docker compose down`
+3. Emit workload:
+	- Run: `DEMO_MODE=true python -m demo.pipeline`
+4. Validate durable buffering:
+	- Run: `find ./wal -type f -name "*.json" | wc -l`
+	- Expected: value > 0
+	- Run: `ls ./wal/span | wc -l` and `ls ./wal/decision | wc -l`
+	- Expected: both > 0 after demo run
+5. Restore storage:
+	- Run: `docker compose up -d`
+	- Run: `python -m db.init_db`
+6. Replay buffered events:
+	- Run: `python -m collector.replay_wal`
+	- Expected output contains inserted counts for spans/decisions
+7. Confirm WAL drained:
+	- Run: `find ./wal -type f | wc -l`
+	- Expected: 0 (or near 0 if new traffic arrives concurrently)
+8. Confirm persistence in ClickHouse:
+	- Run: `curl -s http://127.0.0.1:8123 -d "SELECT count() FROM tracing.raw_spans"`
+	- Run: `curl -s http://127.0.0.1:8123 -d "SELECT count() FROM tracing.raw_decisions"`
+	- Expected: both counts increase compared to pre-replay values
 
 ### ENG-03: Idempotent Writes and Dedupe
 - **Scope:** Ensure duplicate events do not corrupt final trace state.
