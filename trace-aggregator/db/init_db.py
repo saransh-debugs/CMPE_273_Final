@@ -82,7 +82,10 @@ CREATE TABLE IF NOT EXISTS tracing.reconstructed_traces (
     dag_json        String,
 
     -- Per-agent blame breakdown as JSON
-    blame_json      String
+    blame_json      String,
+
+    -- The user prompt / task description that initiated this trace
+    input_text      String DEFAULT ''
 ) ENGINE = ReplacingMergeTree(reconstructed_at)
 ORDER BY trace_id
 """
@@ -132,6 +135,31 @@ CREATE TABLE IF NOT EXISTS tracing.decision_edges (
 ORDER BY (trace_id, decision_id, target_span_id)
 """
 
+SCHEMA_DECISION_REASON_CHAINS = """
+CREATE TABLE IF NOT EXISTS tracing.decision_reason_chains (
+    trace_id String,
+    decision_id String,
+    source_span_id String,
+    target_span_id String,
+    chain_rank UInt16,
+
+    actor_agent_id String,
+    decision_type LowCardinality(String),
+    selected_candidate_id String,
+    confidence Float64,
+    uncertainty LowCardinality(String),
+    reason_summary String,
+
+    impact_latency_ms UInt32,
+    impact_tokens UInt32,
+    impact_error_count UInt32,
+    impact_score Float64,
+
+    reconstructed_at DateTime64(3) DEFAULT now64(3)
+) ENGINE = ReplacingMergeTree(reconstructed_at)
+ORDER BY (trace_id, decision_id, chain_rank, target_span_id)
+"""
+
 
 def setup() -> None:
     print("→ Connecting to ClickHouse...")
@@ -152,6 +180,15 @@ def setup() -> None:
 
     print("→ Creating decision_edges table...")
     client.command(SCHEMA_DECISION_EDGES)
+
+    print("→ Creating decision_reason_chains table...")
+    client.command(SCHEMA_DECISION_REASON_CHAINS)
+
+    print("→ Ensuring input_text column on reconstructed_traces...")
+    try:
+        client.command("ALTER TABLE tracing.reconstructed_traces ADD COLUMN IF NOT EXISTS input_text String DEFAULT ''")
+    except Exception:
+        pass
 
     print("\n✅ Schema ready. Tables in `tracing`:")
     rows = client.query("SHOW TABLES FROM tracing").result_rows

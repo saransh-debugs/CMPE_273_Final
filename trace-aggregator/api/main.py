@@ -57,7 +57,8 @@ def list_traces(
     rows = _client().query(f"""
         SELECT trace_id, span_count, total_latency_ms,
                total_input_tokens, total_output_tokens, error_count,
-               latest_reconstructed_at AS reconstructed_at
+               latest_reconstructed_at AS reconstructed_at,
+               input_text
         FROM (
             SELECT
                 trace_id,
@@ -66,7 +67,8 @@ def list_traces(
                 argMax(total_input_tokens, reconstructed_at) AS total_input_tokens,
                 argMax(total_output_tokens, reconstructed_at) AS total_output_tokens,
                 argMax(error_count, reconstructed_at) AS error_count,
-                max(reconstructed_at) AS latest_reconstructed_at
+                max(reconstructed_at) AS latest_reconstructed_at,
+                argMax(input_text, reconstructed_at) AS input_text
             FROM tracing.reconstructed_traces
             GROUP BY trace_id
         )
@@ -83,6 +85,7 @@ def list_traces(
         "total_output_tokens": int(r[4]),
         "error_count": int(r[5]),
         "reconstructed_at": r[6].isoformat(),
+        "input_text": r[7] or "",
     } for r in rows]
 
 
@@ -93,7 +96,7 @@ def get_trace(trace_id: str):
         """
         SELECT trace_id, span_count, total_latency_ms,
                total_input_tokens, total_output_tokens, error_count,
-               dag_json, blame_json, reconstructed_at
+               dag_json, blame_json, reconstructed_at, input_text
         FROM tracing.reconstructed_traces FINAL
         WHERE trace_id = {trace_id:String}
         """,
@@ -112,8 +115,9 @@ def get_trace(trace_id: str):
         "dag": json.loads(r[6]),
         "blame": json.loads(r[7]),
         "reconstructed_at": r[8].isoformat(),
+        "input_text": r[9] or "",
     }
-    decisions = get_trace_decisions(trace_id)
+    decisions = _query_trace_decisions(trace_id=trace_id, limit=200, offset=0)
     trace_payload["decisions"] = decisions
     trace_payload["decision_count"] = len(decisions)
     return trace_payload
@@ -147,20 +151,54 @@ def get_raw_spans(trace_id: str):
     } for r in rows]
 
 
-@app.get("/traces/{trace_id}/decisions")
-def get_trace_decisions(trace_id: str):
-    rows = _client().query(
-        """
+def _query_trace_decisions(
+    *,
+    trace_id: str,
+    decision_type: Optional[str] = None,
+    actor_agent_id: Optional[str] = None,
+    confidence_min: Optional[float] = None,
+    confidence_max: Optional[float] = None,
+    from_ts: Optional[int] = None,
+    to_ts: Optional[int] = None,
+    metadata_query: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+):
+    clauses = ["trace_id = {trace_id:String}"]
+    params = {"trace_id": trace_id}
+    if decision_type:
+        clauses.append("decision_type = {decision_type:String}")
+        params["decision_type"] = decision_type
+    if actor_agent_id:
+        clauses.append("actor_agent_id = {actor_agent_id:String}")
+        params["actor_agent_id"] = actor_agent_id
+    if confidence_min is not None:
+        clauses.append("confidence >= {confidence_min:Float64}")
+        params["confidence_min"] = float(confidence_min)
+    if confidence_max is not None:
+        clauses.append("confidence <= {confidence_max:Float64}")
+        params["confidence_max"] = float(confidence_max)
+    if from_ts is not None:
+        clauses.append("timestamp_ms >= {from_ts:UInt64}")
+        params["from_ts"] = int(from_ts)
+    if to_ts is not None:
+        clauses.append("timestamp_ms <= {to_ts:UInt64}")
+        params["to_ts"] = int(to_ts)
+    if metadata_query:
+        clauses.append("positionCaseInsensitive(metadata, {metadata_query:String}) > 0")
+        params["metadata_query"] = metadata_query
+
+    query = f"""
         SELECT trace_id, decision_id, source_span_id, actor_agent_id,
                decision_type, selected_candidate_id, confidence,
                rationale_summary, evidence_refs, candidates_json,
                timestamp_ms, metadata
         FROM tracing.raw_decisions
-        WHERE trace_id = {trace_id:String}
+        WHERE {' AND '.join(clauses)}
         ORDER BY timestamp_ms ASC
-        """,
-        parameters={"trace_id": trace_id},
-    ).result_rows
+        LIMIT {limit} OFFSET {offset}
+        """
+    rows = _client().query(query, parameters=params).result_rows
     out = []
     for r in rows:
         try:
@@ -186,24 +224,93 @@ def get_trace_decisions(trace_id: str):
     return out
 
 
+@app.get("/traces/{trace_id}/decisions")
+def get_trace_decisions(
+    trace_id: str,
+    decision_type: Optional[str] = None,
+    actor_agent_id: Optional[str] = None,
+    confidence_min: Optional[float] = Query(None, ge=0.0, le=1.0),
+    confidence_max: Optional[float] = Query(None, ge=0.0, le=1.0),
+    from_ts: Optional[int] = Query(None, ge=0),
+    to_ts: Optional[int] = Query(None, ge=0),
+    metadata_query: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+):
+    return _query_trace_decisions(
+        trace_id=trace_id,
+        decision_type=decision_type,
+        actor_agent_id=actor_agent_id,
+        confidence_min=confidence_min,
+        confidence_max=confidence_max,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        metadata_query=metadata_query,
+        limit=limit,
+        offset=offset,
+    )
+
+
 @app.get("/traces/{trace_id}/root-cause")
-def get_root_cause(trace_id: str):
-    rows = _client().query(
-        """
-        SELECT decision_id, source_span_id, target_span_id,
-               decision_type, actor_agent_id, selected_candidate_id,
-               confidence, rationale_summary,
-               max(impact_latency_ms) AS impact_latency_ms,
-               max(impact_tokens) AS impact_tokens,
-               max(impact_error_count) AS impact_error_count
-        FROM tracing.decision_edges FINAL
-        WHERE trace_id = {trace_id:String}
-        GROUP BY decision_id, source_span_id, target_span_id, decision_type,
-                 actor_agent_id, selected_candidate_id, confidence, rationale_summary
-        ORDER BY impact_error_count DESC, impact_latency_ms DESC, impact_tokens DESC
-        """,
-        parameters={"trace_id": trace_id},
-    ).result_rows
+def get_root_cause(
+    trace_id: str,
+    decision_type: Optional[str] = None,
+    actor_agent_id: Optional[str] = None,
+    confidence_min: Optional[float] = Query(None, ge=0.0, le=1.0),
+    confidence_max: Optional[float] = Query(None, ge=0.0, le=1.0),
+    limit: int = Query(200, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+):
+    clauses = ["trace_id = {trace_id:String}"]
+    params = {"trace_id": trace_id}
+    if decision_type:
+        clauses.append("decision_type = {decision_type:String}")
+        params["decision_type"] = decision_type
+    if actor_agent_id:
+        clauses.append("actor_agent_id = {actor_agent_id:String}")
+        params["actor_agent_id"] = actor_agent_id
+    if confidence_min is not None:
+        clauses.append("confidence >= {confidence_min:Float64}")
+        params["confidence_min"] = float(confidence_min)
+    if confidence_max is not None:
+        clauses.append("confidence <= {confidence_max:Float64}")
+        params["confidence_max"] = float(confidence_max)
+
+    client = _client()
+    try:
+        rows = client.query(
+            f"""
+            SELECT decision_id, source_span_id, target_span_id,
+                   decision_type, actor_agent_id, selected_candidate_id,
+                   confidence, reason_summary,
+                   impact_latency_ms, impact_tokens, impact_error_count,
+                   impact_score, uncertainty, chain_rank
+            FROM tracing.decision_reason_chains FINAL
+            WHERE {' AND '.join(clauses)}
+            ORDER BY impact_score DESC, chain_rank ASC
+            LIMIT {limit} OFFSET {offset}
+            """,
+            parameters=params,
+        ).result_rows
+    except Exception:
+        # Backward-compatible fallback for environments that haven't created
+        # decision_reason_chains yet.
+        rows = client.query(
+            f"""
+            SELECT decision_id, source_span_id, target_span_id,
+                   decision_type, actor_agent_id, selected_candidate_id,
+                   confidence, rationale_summary,
+                   impact_latency_ms, impact_tokens, impact_error_count,
+                   0.0 AS impact_score,
+                   'unknown' AS uncertainty,
+                   999 AS chain_rank
+            FROM tracing.decision_edges FINAL
+            WHERE {' AND '.join(clauses)}
+            ORDER BY impact_error_count DESC, impact_latency_ms DESC, impact_tokens DESC
+            LIMIT {limit} OFFSET {offset}
+            """,
+            parameters=params,
+        ).result_rows
     return [
         {
             "decision_id": r[0],
@@ -217,6 +324,9 @@ def get_root_cause(trace_id: str):
             "impact_latency_ms": int(r[8]),
             "impact_tokens": int(r[9]),
             "impact_error_count": int(r[10]),
+            "impact_score": float(r[11]),
+            "uncertainty": r[12],
+            "chain_rank": int(r[13]),
         }
         for r in rows
     ]

@@ -46,7 +46,9 @@ def test_parallel_fanout():
     ]
     nodes = reconstruct_dag(spans)
     assert set(nodes["o"].children) == {"r", "c"}
-    assert "v" in nodes["r"].children or "v" in nodes["c"].children
+    assert "v" in nodes["r"].children and "v" in nodes["c"].children
+    assert set(nodes["v"].parent_ids) == {"r", "c"}
+    assert nodes["v"].parent_resolution in {"explicit_plus_fanin", "inferred"}
     print("  ✓ parallel fanout")
 
 
@@ -82,6 +84,8 @@ def test_serialize_dag():
     out = serialize_dag(reconstruct_dag(spans))
     assert len(out) == 2
     assert out[0]["start_time_ms"] <= out[1]["start_time_ms"]
+    assert "parent_span_ids" in out[0]
+    assert "parent_resolution" in out[0]
     print("  ✓ serialize_dag")
 
 

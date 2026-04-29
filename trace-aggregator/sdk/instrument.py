@@ -23,11 +23,13 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import time
 import traceback
 import uuid
 from typing import Any, Callable, Dict, Iterable, Optional
 
+from pydantic import BaseModel, Field, ValidationError
 from generated import tracing_pb2
 
 from .client import emit_decision as _emit_decision
@@ -37,18 +39,57 @@ from .client import emit_span
 TRACE_ID_KEY = "_trace_id"
 VECTOR_CLOCK_KEY = "_vector_clock"
 PARENT_SPAN_KEY = "_parent_span_id"
+INPUT_TEXT_KEY = "_input_text"
 
 METADATA_CHAR_LIMIT = 4_000  # truncate big prompts so spans stay small
 ALLOWED_DECISION_TYPES = {"agent_handoff", "tool_select", "route_branch"}
+DEFAULT_REDACT_KEYS = {
+    "password",
+    "api_key",
+    "token",
+    "secret",
+    "authorization",
+    "cookie",
+}
+REDACT_KEYS = {
+    k.strip().lower()
+    for k in os.environ.get("TRACE_REDACT_KEYS", "").split(",")
+    if k.strip()
+} | DEFAULT_REDACT_KEYS
 
 
-def new_trace_context() -> Dict[str, Any]:
+class DecisionCandidateModel(BaseModel):
+    candidate_id: str = Field(default="")
+    candidate_type: str = Field(default="")
+    score: float = Field(default=0.0)
+    reason: str = Field(default="")
+
+
+class DecisionPayloadModel(BaseModel):
+    trace_id: str
+    decision_id: str
+    source_span_id: str
+    actor_agent_id: str
+    decision_type: str
+    selected_candidate_id: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    rationale_summary: str = Field(max_length=512)
+    evidence_refs: list[str] = Field(default_factory=list)
+    candidates: list[DecisionCandidateModel] = Field(default_factory=list)
+    timestamp_ms: int
+    metadata: str = Field(default="")
+
+
+def new_trace_context(input_text: str = "") -> Dict[str, Any]:
     """Build the initial tracing fields to merge into your initial state."""
-    return {
+    ctx: Dict[str, Any] = {
         TRACE_ID_KEY: str(uuid.uuid4()),
         VECTOR_CLOCK_KEY: {},
         PARENT_SPAN_KEY: "",
     }
+    if input_text:
+        ctx[INPUT_TEXT_KEY] = input_text
+    return ctx
 
 
 def _truncate(text: str, limit: int = METADATA_CHAR_LIMIT) -> str:
@@ -86,6 +127,51 @@ def _normalize_candidates(candidates: Iterable[Dict[str, Any]]) -> list[tracing_
     return normalized
 
 
+def _redact_sensitive(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted = {}
+        for k, v in value.items():
+            if str(k).lower() in REDACT_KEYS:
+                redacted[k] = "[REDACTED]"
+            else:
+                redacted[k] = _redact_sensitive(v)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_sensitive(v) for v in value]
+    return value
+
+
+def validate_decision_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate decision payload contract and return normalized dict."""
+    parsed = DecisionPayloadModel(**payload)
+    return parsed.model_dump()
+
+
+def build_decision_fallback(
+    *,
+    trace_id: str,
+    source_span_id: str,
+    actor_agent_id: str,
+    decision_type: str,
+    selected_candidate_id: str = "fallback",
+    reason: str = "decision_payload_validation_failed",
+) -> Dict[str, Any]:
+    return {
+        "trace_id": trace_id,
+        "decision_id": str(uuid.uuid4()),
+        "source_span_id": source_span_id,
+        "actor_agent_id": actor_agent_id,
+        "decision_type": decision_type,
+        "selected_candidate_id": selected_candidate_id,
+        "confidence": 0.0,
+        "rationale_summary": "Fallback decision emitted due to invalid decision payload.",
+        "evidence_refs": [reason],
+        "candidates": [],
+        "timestamp_ms": int(time.time() * 1000),
+        "metadata": json.dumps({"fallback_used": True, "parse_error_reason": reason}),
+    }
+
+
 def emit_decision(
     *,
     trace_id: str,
@@ -108,19 +194,56 @@ def emit_decision(
             f"decision_type must be one of {sorted(ALLOWED_DECISION_TYPES)}, got {decision_type}"
         )
     decision_id = str(uuid.uuid4())
+    raw_payload = {
+        "trace_id": str(trace_id),
+        "decision_id": decision_id,
+        "source_span_id": str(source_span_id),
+        "actor_agent_id": str(actor_agent_id),
+        "decision_type": decision_type,
+        "selected_candidate_id": str(selected_candidate_id),
+        "confidence": float(confidence),
+        "rationale_summary": _truncate(str(rationale_summary), 512),
+        "evidence_refs": [str(e) for e in (evidence_refs or [])],
+        "candidates": [
+            {
+                "candidate_id": str(c.get("candidate_id", "")),
+                "candidate_type": str(c.get("candidate_type", "")),
+                "score": float(c.get("score", 0.0) or 0.0),
+                "reason": _truncate(str(c.get("reason", ""))),
+            }
+            for c in (candidates or [])
+            if isinstance(c, dict)
+        ],
+        "timestamp_ms": int(time.time() * 1000),
+        "metadata": _truncate(
+            json.dumps(_redact_sensitive(metadata or {}), default=str),
+        ),
+    }
+    try:
+        normalized = validate_decision_payload(raw_payload)
+    except ValidationError as e:
+        normalized = build_decision_fallback(
+            trace_id=str(trace_id),
+            source_span_id=str(source_span_id),
+            actor_agent_id=str(actor_agent_id),
+            decision_type=decision_type,
+            reason=str(e.errors()[0].get("msg", "validation_error")),
+        )
+        decision_id = normalized["decision_id"]
+
     payload = tracing_pb2.DecisionEvent(
-        trace_id=str(trace_id),
-        decision_id=decision_id,
-        source_span_id=str(source_span_id),
-        actor_agent_id=str(actor_agent_id),
-        decision_type=decision_type,
-        selected_candidate_id=str(selected_candidate_id),
-        confidence=float(confidence),
-        rationale_summary=_truncate(str(rationale_summary), 512),
-        evidence_refs=[str(e) for e in (evidence_refs or [])],
-        candidates=_normalize_candidates(candidates or []),
-        timestamp_ms=int(time.time() * 1000),
-        metadata=_truncate(json.dumps(metadata or {}, default=str)),
+        trace_id=normalized["trace_id"],
+        decision_id=normalized["decision_id"],
+        source_span_id=normalized["source_span_id"],
+        actor_agent_id=normalized["actor_agent_id"],
+        decision_type=normalized["decision_type"],
+        selected_candidate_id=normalized["selected_candidate_id"],
+        confidence=float(normalized["confidence"]),
+        rationale_summary=str(normalized["rationale_summary"]),
+        evidence_refs=[str(e) for e in normalized["evidence_refs"]],
+        candidates=_normalize_candidates(normalized["candidates"]),
+        timestamp_ms=int(normalized["timestamp_ms"]),
+        metadata=str(normalized["metadata"]),
     )
     _emit_decision(payload)
     return decision_id
@@ -200,6 +323,11 @@ def instrument_node(
             start_wall_ms = int(time.time() * 1000)
             t0 = time.perf_counter()
 
+            # Expose current span_id to in-node decision emitters BEFORE
+            # calling the function. The span proto already captured the
+            # incoming parent_span_id above, so this is safe.
+            state[PARENT_SPAN_KEY] = span_id
+
             error: Optional[BaseException] = None
             result: Any = None
             try:
@@ -214,7 +342,6 @@ def instrument_node(
             # Build the metadata payload
             meta: Dict[str, Any] = {}
             if capture_metadata:
-                # Strip our own internal keys before serializing user state.
                 user_state = {
                     k: v for k, v in state.items()
                     if not k.startswith("_")
@@ -222,6 +349,9 @@ def instrument_node(
                 meta["input_state_keys"] = list(user_state.keys())
                 if isinstance(result, dict):
                     meta["output_state_keys"] = [k for k in result.keys() if not k.startswith("_")]
+            input_text = state.get(INPUT_TEXT_KEY)
+            if input_text:
+                meta["input_text"] = _truncate(str(input_text), 1000)
             if error is not None:
                 meta["error_type"] = type(error).__name__
                 meta["error_message"] = str(error)

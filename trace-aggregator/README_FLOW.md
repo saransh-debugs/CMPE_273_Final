@@ -193,7 +193,24 @@ Run and verify:
 
 ---
 
-## 10) Known limitations (current)
+## 10) Operability and scale utilities
+
+- Alerting worker:
+  - `python -m alerting.worker`
+  - rules: stuck traces, runaway token usage, repeated agent errors
+  - supports webhook sink via `ALERT_WEBHOOK_URL`
+- SLO metrics:
+  - `python scripts/slo_report.py --minutes 60`
+  - reports reconstruction lag (avg/p95/p99) and missing reconstructions
+- Load harness:
+  - `python scripts/load_test.py --traces 1000 --concurrency 32 --collector localhost:50051`
+  - generates synthetic spans + decisions for throughput/reliability testing
+- Benchmark template:
+  - `docs/benchmark.md` for reproducible reporting
+
+---
+
+## 11) Known limitations (current)
 
 - Demo decision coverage is still partial (not every branch emits explicit decisions).
 - Decision rationale quality depends on emitter logic.
@@ -202,7 +219,7 @@ Run and verify:
 
 ---
 
-## 11) Practical summary
+## 12) Practical summary
 
 - Core platform functionality is implemented and working.
 - Decision observability pipeline is implemented.

@@ -74,6 +74,7 @@ class AgentState(TypedDict, total=False):
     _trace_id: Annotated[str, _merge_trace_id]
     _vector_clock: Annotated[Dict[str, int], _merge_vector_clock]
     _parent_span_id: Annotated[str, _merge_parent_span]
+    _input_text: str
 
 
 # --- Mock LLM ----------------------------------------------------------------
@@ -193,17 +194,69 @@ def _decision_from_llm(state: AgentState) -> Dict[str, Any]:
     return parsed
 
 
+def _maybe_emit_decision(state: AgentState, payload: Dict[str, Any]) -> None:
+    trace_id = str(state.get("_trace_id", ""))
+    source_span_id = str(state.get("_parent_span_id", ""))
+    if not trace_id:
+        return
+    emit_decision(
+        trace_id=trace_id,
+        source_span_id=source_span_id,
+        actor_agent_id=str(payload.get("actor_agent_id", "unknown_agent")),
+        decision_type=str(payload.get("decision_type", "route_branch")),
+        selected_candidate_id=str(payload.get("selected_candidate_id", "unknown")),
+        confidence=float(payload.get("confidence", 0.5)),
+        rationale_summary=str(payload.get("rationale_summary", "decision emitted")),
+        evidence_refs=[str(x) for x in payload.get("evidence_refs", [])],
+        candidates=payload.get("candidates", []),
+        metadata=payload.get("metadata", {}),
+    )
+
+
 # --- Agents ------------------------------------------------------------------
 
 @instrument_node("orchestrator")
 def orchestrator(state: AgentState) -> Dict[str, Any]:
     if DEMO_MODE:
+        reasoning = (
+            "I have two independent tasks: market research and code generation. "
+            "Neither depends on the other, so I'll fan out in parallel to minimize "
+            "wall-clock time. Once both complete, the reviewer can cross-check."
+        )
         tok = _mock_llm((0.05, 0.15), (50, 100))
     else:
-        tok = _agent_llm(
+        res = _agent_llm(
             "Create a concise execution plan: run research and code in parallel, then review.",
             system="You are an orchestrator agent for software workflow planning.",
         )
+        reasoning = (res.get("content") or "")[:400]
+        tok = res
+    _maybe_emit_decision(
+        state,
+        {
+            "actor_agent_id": "orchestrator",
+            "decision_type": "agent_handoff",
+            "selected_candidate_id": "parallel_research_coder",
+            "confidence": 0.9 if DEMO_MODE else 0.78,
+            "rationale_summary": "Dispatch research and coding in parallel to reduce total turnaround.",
+            "evidence_refs": ["workflow=parallel_fanout", "goal=minimize_latency"],
+            "candidates": [
+                {
+                    "candidate_id": "parallel_research_coder",
+                    "candidate_type": "branch",
+                    "score": 0.9 if DEMO_MODE else 0.78,
+                    "reason": "maximizes throughput",
+                },
+                {
+                    "candidate_id": "serial_research_then_coder",
+                    "candidate_type": "branch",
+                    "score": 0.1 if DEMO_MODE else 0.22,
+                    "reason": "simpler ordering but slower",
+                },
+            ],
+            "metadata": {"stage": "orchestrator_dispatch", "mode": "demo" if DEMO_MODE else "real", "reasoning": reasoning},
+        },
+    )
     return {
         "messages": [f"orchestrator: dispatching research + code tasks ({'demo' if DEMO_MODE else 'real'})"],
         **tok,
@@ -213,7 +266,35 @@ def orchestrator(state: AgentState) -> Dict[str, Any]:
 @instrument_node("research_agent")
 def research(state: AgentState) -> Dict[str, Any]:
     if DEMO_MODE:
-        tok = _mock_llm((0.4, 0.8), (200, 400))  # research is slow + chatty
+        reasoning = (
+            "The task requires market analysis. I'll use the LLM to synthesize "
+            "concise findings that downstream agents — the coder and reviewer — "
+            "can consume without re-querying."
+        )
+    else:
+        reasoning = ""
+    _maybe_emit_decision(
+        state,
+        {
+            "actor_agent_id": "research_agent",
+            "decision_type": "tool_select",
+            "selected_candidate_id": "llm_research_summary",
+            "confidence": 0.86 if DEMO_MODE else 0.73,
+            "rationale_summary": "Generate concise market findings for downstream coding and review.",
+            "evidence_refs": ["task=market_analysis"],
+            "candidates": [
+                {
+                    "candidate_id": "llm_research_summary",
+                    "candidate_type": "tool",
+                    "score": 0.86 if DEMO_MODE else 0.73,
+                    "reason": "quick structured synthesis",
+                }
+            ],
+            "metadata": {"stage": "research_execute", "mode": "demo" if DEMO_MODE else "real", "reasoning": reasoning},
+        },
+    )
+    if DEMO_MODE:
+        tok = _mock_llm((0.4, 0.8), (200, 400))
         findings = "market size estimated at $X; key players: A, B, C"
     else:
         res = _agent_llm(
@@ -231,6 +312,34 @@ def research(state: AgentState) -> Dict[str, Any]:
 
 @instrument_node("coder_agent")
 def coder(state: AgentState) -> Dict[str, Any]:
+    if DEMO_MODE:
+        reasoning = (
+            "I need to produce a code artifact. The spec asks for a Python function, "
+            "so I'll generate a candidate implementation. The reviewer will validate "
+            "correctness before it ships."
+        )
+    else:
+        reasoning = ""
+    _maybe_emit_decision(
+        state,
+        {
+            "actor_agent_id": "coder_agent",
+            "decision_type": "tool_select",
+            "selected_candidate_id": "write_python_function",
+            "confidence": 0.79 if DEMO_MODE else 0.69,
+            "rationale_summary": "Generate candidate implementation before reviewer validation.",
+            "evidence_refs": ["task=produce_code_artifact"],
+            "candidates": [
+                {
+                    "candidate_id": "write_python_function",
+                    "candidate_type": "tool",
+                    "score": 0.79 if DEMO_MODE else 0.69,
+                    "reason": "directly satisfies coding task",
+                }
+            ],
+            "metadata": {"stage": "coder_execute", "mode": "demo" if DEMO_MODE else "real", "reasoning": reasoning},
+        },
+    )
     if DEMO_MODE:
         tok = _mock_llm((0.3, 0.6), (300, 600))
     else:
@@ -251,19 +360,33 @@ def coder(state: AgentState) -> Dict[str, Any]:
 @instrument_node("reviewer_agent")
 def reviewer(state: AgentState) -> Dict[str, Any]:
     decision = _decision_from_llm(state)
-    if state.get("_trace_id") and state.get("_parent_span_id"):
-        emit_decision(
-            trace_id=state["_trace_id"],
-            source_span_id=state["_parent_span_id"],
-            actor_agent_id="reviewer_agent",
-            decision_type="route_branch",
-            selected_candidate_id=str(decision.get("selected_candidate_id", "review")),
-            confidence=float(decision.get("confidence", 0.5)),
-            rationale_summary=str(decision.get("rationale_summary", "decision rationale unavailable")),
-            evidence_refs=[str(x) for x in decision.get("evidence_refs", [])],
-            candidates=decision.get("candidates", []),
-            metadata={"component": "demo.pipeline", "stage": "reviewer_entry", "mode": "demo" if DEMO_MODE else "real"},
+    if DEMO_MODE:
+        reasoning = (
+            "Both the research findings and the code artifact have arrived. "
+            "I'll cross-check the code against the research context and verify "
+            "correctness before approving."
         )
+    else:
+        reasoning = str(decision.get("rationale_summary", ""))[:400]
+    _maybe_emit_decision(
+        state,
+        {
+            "actor_agent_id": "reviewer_agent",
+            "decision_type": "route_branch",
+            "selected_candidate_id": str(decision.get("selected_candidate_id", "review")),
+            "confidence": float(decision.get("confidence", 0.5)),
+            "rationale_summary": str(decision.get("rationale_summary", "decision rationale unavailable")),
+            "evidence_refs": [str(x) for x in decision.get("evidence_refs", [])],
+            "candidates": decision.get("candidates", []),
+            "metadata": {
+                "component": "demo.pipeline",
+                "stage": "reviewer_entry",
+                "mode": "demo" if DEMO_MODE else "real",
+                "fallback_used": "fallback_json_parse_error" in decision.get("evidence_refs", []),
+                "reasoning": reasoning,
+            },
+        },
+    )
     if DEMO_MODE:
         tok = _mock_llm((0.15, 0.3), (100, 200))
         review_text = "LGTM with nits"
@@ -301,19 +424,29 @@ def build_graph():
     return g.compile()
 
 
-def run_once() -> None:
+DEMO_TASKS = [
+    "Research the AI observability market and write a Python function that returns 42.",
+    "Analyze competitor pricing for trace aggregation tools, then code a health-check endpoint.",
+    "Summarize recent LLM-ops trends and produce a minimal data pipeline in Python.",
+    "Gather market sizing data for multi-agent platforms and implement a retry decorator.",
+    "Survey open-source tracing libraries and write a span-batching utility function.",
+]
+
+
+def run_once(task: str = "") -> None:
     app = build_graph()
     state: AgentState = {
         "messages": ["start"],
-        **new_trace_context(),
+        **new_trace_context(input_text=task),
     }
     print(f"→ Running trace_id={state['_trace_id']}")
+    if task:
+        print(f"  task: {task}")
     try:
         final = app.invoke(state)
         print(f"✓ Pipeline finished. Messages: {final.get('messages')}")
     except Exception as e:
         print(f"✗ Pipeline raised: {type(e).__name__}: {e}")
-    # Give the SDK background thread a moment to flush.
     time.sleep(0.5)
 
 
@@ -322,7 +455,7 @@ def main():
     print(f"Running {n} pipeline executions... mode={'demo' if DEMO_MODE else 'real'} model={OPENAI_MODEL if not DEMO_MODE else 'mock'}")
     for i in range(n):
         print(f"\n--- Run {i + 1}/{n} ---")
-        run_once()
+        run_once(task=DEMO_TASKS[i % len(DEMO_TASKS)])
     print("\nAll done. Spans should be in ClickHouse — check the API:")
     print("  curl http://localhost:8000/traces")
 

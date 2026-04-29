@@ -40,7 +40,10 @@ class Span:
 class DAGNode:
     span: Span
     children: List[str] = field(default_factory=list)
+    parent_ids: List[str] = field(default_factory=list)
     inferred_parent: bool = False  # True if we filled in a missing parent
+    parent_resolution: str = "none"  # explicit | inferred | explicit_plus_fanin | root
+    inferred_candidates: List[str] = field(default_factory=list)
 
 
 def _precedes(a: Dict[str, int], b: Dict[str, int]) -> bool:
@@ -63,6 +66,37 @@ def _clock_size(clock: Dict[str, int]) -> int:
     return sum(clock.values())
 
 
+def _parent_sort_key(span: Span) -> Tuple[int, int, str]:
+    """
+    Deterministic parent ordering:
+    1) deeper vector-clock first
+    2) later start_time first
+    3) lexical span_id for stable total ordering
+    """
+    return (-_clock_size(span.vector_clock), -int(span.start_time_ms), span.span_id)
+
+
+def _causal_frontier_parents(current: Span, spans: List[Span]) -> List[str]:
+    """
+    Return immediate causal predecessors of `current` (can be multiple for fan-in).
+    A predecessor is in the frontier if no other predecessor lies strictly between it and current.
+    """
+    preds = [cand for cand in spans if cand.span_id != current.span_id and _precedes(cand.vector_clock, current.vector_clock)]
+    frontier: List[Span] = []
+    for cand in preds:
+        dominated = False
+        for other in preds:
+            if other.span_id == cand.span_id:
+                continue
+            if _precedes(cand.vector_clock, other.vector_clock) and _precedes(other.vector_clock, current.vector_clock):
+                dominated = True
+                break
+        if not dominated:
+            frontier.append(cand)
+    frontier.sort(key=_parent_sort_key)
+    return [p.span_id for p in frontier]
+
+
 def reconstruct_dag(spans: List[Span]) -> Dict[str, DAGNode]:
     """
     Build a parent-child DAG keyed by span_id.
@@ -77,29 +111,42 @@ def reconstruct_dag(spans: List[Span]) -> Dict[str, DAGNode]:
     nodes: Dict[str, DAGNode] = {sid: DAGNode(span=s) for sid, s in by_id.items()}
 
     for s in spans:
-        parent_id: Optional[str] = None
+        parent_ids: List[str] = []
+        explicit_parent = s.parent_span_id if s.parent_span_id and s.parent_span_id in by_id else ""
 
         # Step 1: explicit parent, if it landed in this batch.
-        if s.parent_span_id and s.parent_span_id in by_id:
-            parent_id = s.parent_span_id
+        if explicit_parent:
+            parent_ids.append(explicit_parent)
+            nodes[s.span_id].parent_resolution = "explicit"
         else:
-            # Step 2: infer using vector clocks. Pick the causally latest
-            # ancestor — i.e. the span with the largest clock that still
-            # strictly precedes ours.
-            best: Optional[Tuple[int, str]] = None
-            for cand in spans:
-                if cand.span_id == s.span_id:
-                    continue
-                if _precedes(cand.vector_clock, s.vector_clock):
-                    score = _clock_size(cand.vector_clock)
-                    if best is None or score > best[0]:
-                        best = (score, cand.span_id)
-            if best is not None:
-                parent_id = best[1]
+            # Step 2: infer using vector clocks. Keep immediate causal frontier.
+            inferred = _causal_frontier_parents(s, spans)
+            if inferred:
+                parent_ids.extend(inferred)
                 nodes[s.span_id].inferred_parent = True
+                nodes[s.span_id].inferred_candidates = inferred
+                nodes[s.span_id].parent_resolution = "inferred"
 
-        if parent_id is not None and parent_id != s.span_id:
-            nodes[parent_id].children.append(s.span_id)
+        # Step 3: preserve fan-in semantics from frontier even when explicit parent exists.
+        if explicit_parent:
+            frontier = _causal_frontier_parents(s, spans)
+            extra = [pid for pid in frontier if pid != explicit_parent]
+            if extra:
+                nodes[s.span_id].parent_resolution = "explicit_plus_fanin"
+                nodes[s.span_id].inferred_candidates = extra
+                parent_ids.extend(extra)
+
+        # Stable de-dup ordering.
+        deduped: List[str] = []
+        for pid in parent_ids:
+            if pid and pid not in deduped and pid != s.span_id:
+                deduped.append(pid)
+        nodes[s.span_id].parent_ids = deduped
+        if not deduped and not nodes[s.span_id].inferred_parent:
+            nodes[s.span_id].parent_resolution = "root"
+
+        for pid in deduped:
+            nodes[pid].children.append(s.span_id)
 
     return nodes
 
@@ -123,10 +170,14 @@ def serialize_dag(nodes: Dict[str, DAGNode]) -> List[dict]:
     out = []
     for sid, n in nodes.items():
         s = n.span
+        primary_parent = n.parent_ids[0] if n.parent_ids else s.parent_span_id
         out.append({
             "span_id": sid,
-            "parent_span_id": s.parent_span_id,
+            "parent_span_id": primary_parent,
+            "parent_span_ids": n.parent_ids,
             "inferred_parent": n.inferred_parent,
+            "parent_resolution": n.parent_resolution,
+            "inferred_candidates": n.inferred_candidates,
             "children": n.children,
             "agent_id": s.agent_id,
             "event_type": s.event_type,
