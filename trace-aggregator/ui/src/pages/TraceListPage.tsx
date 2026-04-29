@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { api } from "../api";
 import type { TraceSummary } from "../types";
-import { fmtMs, fmtTokens, fmtRelative, shortId } from "../utils/format";
+import { fmtDateTime, fmtMs, fmtTokens, shortId } from "../utils/format";
 
 type Filter = "all" | "errors" | "clean";
 
@@ -101,7 +101,7 @@ export function TraceListPage() {
       {/* Table */}
       {traces.length > 0 && (
         <div className="hairline rounded-sm overflow-hidden">
-          <div className="grid grid-cols-[1fr_120px_140px_120px_100px_120px] gap-4 px-5 py-3 font-mono text-[10px] uppercase tracking-[0.18em] text-cream-500 hairline-b bg-ink-700/30">
+          <div className="grid grid-cols-[1fr_120px_140px_120px_100px_180px] gap-4 px-5 py-3 font-mono text-[10px] uppercase tracking-[0.18em] text-cream-500 hairline-b bg-ink-700/30">
             <div>trace</div>
             <div className="text-right">spans</div>
             <div className="text-right">latency</div>
@@ -118,7 +118,7 @@ export function TraceListPage() {
             >
               <Link
                 to={`/traces/${t.trace_id}`}
-                className="grid grid-cols-[1fr_120px_140px_120px_100px_120px] gap-4 px-5 py-3.5 hover:bg-ink-700/40 transition-colors items-center hairline-b last:border-b-0 group"
+                className="grid grid-cols-[1fr_120px_140px_120px_100px_180px] gap-4 px-5 py-3.5 hover:bg-ink-700/40 transition-colors items-center hairline-b last:border-b-0 group"
               >
                 <div className="flex items-center gap-3 font-mono text-[12px]">
                   <span className="text-cream-300 group-hover:text-cherry-light transition-colors">
@@ -142,8 +142,11 @@ export function TraceListPage() {
                     <span className="text-cream-500">—</span>
                   )}
                 </div>
-                <div className="text-right font-mono text-[11px] text-cream-500">
-                  {fmtRelative(t.reconstructed_at)}
+                <div
+                  className="text-right font-mono text-[11px] text-cream-500 whitespace-nowrap"
+                  title={t.reconstructed_at}
+                >
+                  {fmtDateTime(t.reconstructed_at)}
                 </div>
               </Link>
             </motion.div>

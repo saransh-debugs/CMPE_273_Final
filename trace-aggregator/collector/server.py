@@ -35,6 +35,7 @@ DECISION_COLUMNS = [
     "evidence_refs",
     "candidates_json",
     "metadata",
+    "idempotency_key",
 ]
 
 
@@ -54,6 +55,7 @@ def _span_to_row(s: tracing_pb2.AgentSpan) -> tuple:
         int(s.output_tokens),
         int(s.latency_ms),
         s.metadata,
+        f"{s.trace_id}:{s.span_id}",
     )
 
 
@@ -80,6 +82,7 @@ def _decision_to_row(d: tracing_pb2.DecisionEvent) -> tuple:
         list(d.evidence_refs),
         json.dumps(candidates, default=str),
         d.metadata,
+        f"{d.trace_id}:{d.decision_id}",
     )
 
 

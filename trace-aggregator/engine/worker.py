@@ -61,26 +61,59 @@ def find_active_traces(client) -> List[str]:
 def fetch_spans(client, trace_id: str) -> List[Span]:
     rows = client.query(
         """
-        SELECT span_id, parent_span_id, agent_id, vector_clock,
-               event_type, input_tokens, output_tokens, latency_ms, start_time_ms
+        SELECT
+            span_id,
+            parent_span_id,
+            agent_id,
+            vector_clock,
+            event_type,
+            input_tokens,
+            output_tokens,
+            latency_ms,
+            start_time_ms,
+            idempotency_key,
+            ingested_at
         FROM tracing.raw_spans
         WHERE trace_id = {trace_id:String}
-        ORDER BY start_time_ms ASC
+        ORDER BY start_time_ms ASC, ingested_at DESC
         """,
         parameters={"trace_id": trace_id},
     ).result_rows
-    spans: List[Span] = []
+    
+    # Deduplicate by idempotency_key, keeping the most recent (highest ingested_at)
+    seen_keys = {}
     for r in rows:
+        span_id = r[0]
+        parent_span_id = r[1]
+        agent_id = r[2]
+        vector_clock = r[3]
+        event_type = r[4]
+        input_tokens = r[5]
+        output_tokens = r[6]
+        latency_ms = r[7]
+        start_time_ms = r[8]
+        idempotency_key = r[9]
+        ingested_at = r[10]
+        
+        # Use idempotency_key if present, otherwise use trace_id:span_id
+        dedup_key = idempotency_key if idempotency_key else f"{trace_id}:{span_id}"
+        
+        # Keep the first occurrence (most recent due to ORDER BY ingested_at DESC)
+        if dedup_key not in seen_keys:
+            seen_keys[dedup_key] = (span_id, parent_span_id, agent_id, vector_clock, event_type, input_tokens, output_tokens, latency_ms, start_time_ms)
+    
+    spans: List[Span] = []
+    for span_id, parent_span_id, agent_id, vector_clock, event_type, input_tokens, output_tokens, latency_ms, start_time_ms in seen_keys.values():
         spans.append(Span(
-            span_id=r[0],
-            parent_span_id=r[1] or "",
-            agent_id=r[2],
-            vector_clock=dict(r[3]) if r[3] else {},
-            event_type=r[4],
-            input_tokens=int(r[5]),
-            output_tokens=int(r[6]),
-            latency_ms=int(r[7]),
-            start_time_ms=int(r[8]),
+            span_id=span_id,
+            parent_span_id=parent_span_id or "",
+            agent_id=agent_id,
+            vector_clock=dict(vector_clock) if vector_clock else {},
+            event_type=event_type,
+            input_tokens=int(input_tokens),
+            output_tokens=int(output_tokens),
+            latency_ms=int(latency_ms),
+            start_time_ms=int(start_time_ms),
         ))
     return spans
 
@@ -88,32 +121,69 @@ def fetch_spans(client, trace_id: str) -> List[Span]:
 def fetch_decisions(client, trace_id: str) -> List[Decision]:
     rows = client.query(
         """
-        SELECT trace_id, decision_id, source_span_id, actor_agent_id,
-               decision_type, selected_candidate_id, confidence,
-               rationale_summary, evidence_refs, candidates_json,
-               timestamp_ms, metadata
+        SELECT
+            trace_id,
+            decision_id,
+            source_span_id,
+            actor_agent_id,
+            decision_type,
+            selected_candidate_id,
+            confidence,
+            rationale_summary,
+            evidence_refs,
+            candidates_json,
+            timestamp_ms,
+            metadata,
+            idempotency_key,
+            ingested_at
         FROM tracing.raw_decisions
         WHERE trace_id = {trace_id:String}
-        ORDER BY timestamp_ms ASC
+        ORDER BY timestamp_ms ASC, ingested_at DESC
         """,
         parameters={"trace_id": trace_id},
     ).result_rows
-    decisions: List[Decision] = []
+    
+    # Deduplicate by idempotency_key, keeping the most recent (highest ingested_at)
+    seen_keys = {}
     for r in rows:
+        trace_id_val = r[0]
+        decision_id = r[1]
+        source_span_id = r[2]
+        actor_agent_id = r[3]
+        decision_type = r[4]
+        selected_candidate_id = r[5]
+        confidence = r[6]
+        rationale_summary = r[7]
+        evidence_refs = r[8]
+        candidates_json = r[9]
+        timestamp_ms = r[10]
+        metadata = r[11]
+        idempotency_key = r[12]
+        ingested_at = r[13]
+        
+        # Use idempotency_key if present, otherwise use trace_id:decision_id
+        dedup_key = idempotency_key if idempotency_key else f"{trace_id_val}:{decision_id}"
+        
+        # Keep the first occurrence (most recent due to ORDER BY ingested_at DESC)
+        if dedup_key not in seen_keys:
+            seen_keys[dedup_key] = (trace_id_val, decision_id, source_span_id, actor_agent_id, decision_type, selected_candidate_id, confidence, rationale_summary, evidence_refs, candidates_json, timestamp_ms, metadata)
+    
+    decisions: List[Decision] = []
+    for trace_id_val, decision_id, source_span_id, actor_agent_id, decision_type, selected_candidate_id, confidence, rationale_summary, evidence_refs, candidates_json, timestamp_ms, metadata in seen_keys.values():
         decisions.append(
             Decision(
-                trace_id=r[0],
-                decision_id=r[1],
-                source_span_id=r[2],
-                actor_agent_id=r[3],
-                decision_type=r[4],
-                selected_candidate_id=r[5],
-                confidence=float(r[6]),
-                rationale_summary=r[7],
-                evidence_refs=list(r[8] or []),
-                candidates_json=r[9] or "[]",
-                timestamp_ms=int(r[10]),
-                metadata=r[11] or "",
+                trace_id=trace_id_val,
+                decision_id=decision_id,
+                source_span_id=source_span_id,
+                actor_agent_id=actor_agent_id,
+                decision_type=decision_type,
+                selected_candidate_id=selected_candidate_id,
+                confidence=float(confidence),
+                rationale_summary=rationale_summary,
+                evidence_refs=list(evidence_refs or []),
+                candidates_json=candidates_json or "[]",
+                timestamp_ms=int(timestamp_ms),
+                metadata=metadata or "",
             )
         )
     return decisions
@@ -310,19 +380,23 @@ def _write_decision_edges(client, trace_id: str, decisions: List[Decision], span
 def _extract_input_text(client, trace_id: str) -> str:
     rows = client.query(
         """
-        SELECT metadata FROM tracing.raw_spans
+        SELECT
+            metadata,
+            start_time_ms,
+            idempotency_key,
+            ingested_at
+        FROM tracing.raw_spans
         WHERE trace_id = {trace_id:String}
-        ORDER BY start_time_ms ASC LIMIT 1
+        ORDER BY start_time_ms ASC, ingested_at DESC
+        LIMIT 1
         """,
         parameters={"trace_id": trace_id},
     ).result_rows
-    if not rows or not rows[0][0]:
+    
+    if not rows:
         return ""
-    try:
-        meta = json.loads(rows[0][0])
-        return str(meta.get("input_text", ""))[:1000]
-    except Exception:
-        return ""
+    
+    return rows[0][0] or ""
 
 
 def reconstruct_one(client, trace_id: str) -> dict:

@@ -16,6 +16,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Dict, List
 
 import clickhouse_connect
@@ -87,49 +88,113 @@ def _rule_runaway_tokens(client) -> List[Alert]:
 def _rule_error_burst(client) -> List[Alert]:
     rows = client.query(
         f"""
-        SELECT agent_id, countIf(event_type = 'error') AS errors
+        SELECT
+            agent_id,
+            event_type,
+            idempotency_key,
+            ingested_at
         FROM tracing.raw_spans
         WHERE ingested_at > now() - INTERVAL {LOOKBACK_MIN} MINUTE
-        GROUP BY agent_id
-        HAVING errors >= {ERROR_BURST_THRESHOLD}
-        ORDER BY errors DESC
+        ORDER BY ingested_at DESC
         """
     ).result_rows
-    return [
+    
+    # Deduplicate by idempotency_key
+    seen_keys = {}
+    for r in rows:
+        agent_id = r[0]
+        event_type = r[1]
+        idempotency_key = r[2]
+        ingested_at = r[3]
+        
+        dedup_key = idempotency_key if idempotency_key else f"span_{ingested_at}_{agent_id}"
+        
+        if dedup_key not in seen_keys:
+            seen_keys[dedup_key] = (agent_id, event_type)
+    
+    # Count errors by agent
+    agent_errors = {}
+    for agent_id, event_type in seen_keys.values():
+        if agent_id not in agent_errors:
+            agent_errors[agent_id] = 0
+        if event_type == "error":
+            agent_errors[agent_id] += 1
+    
+    alerts = [
         Alert(
             alert_type="error_burst",
-            key=f"agent:{r[0]}",
+            key=f"agent:{agent_id}",
             severity="medium",
-            message=f"Agent {r[0]} emitted {int(r[1])} errors in {LOOKBACK_MIN}m window.",
-            details={"agent_id": r[0], "errors": int(r[1]), "window_min": LOOKBACK_MIN},
+            message=f"Agent {agent_id} emitted {errors} errors in {LOOKBACK_MIN}m window.",
+            details={"agent_id": agent_id, "errors": errors, "window_min": LOOKBACK_MIN},
         )
-        for r in rows
+        for agent_id, errors in sorted(agent_errors.items(), key=lambda x: x[1], reverse=True)
+        if errors >= ERROR_BURST_THRESHOLD
     ]
+    return alerts
 
 
 def _rule_stuck_traces(client) -> List[Alert]:
-    rows = client.query(
+    # Get raw spans deduplicated
+    spans = client.query(
         f"""
-        SELECT rs.trace_id, max(rs.ingested_at) AS last_ingested
-        FROM tracing.raw_spans rs
-        LEFT JOIN tracing.reconstructed_traces rt
-          ON rs.trace_id = rt.trace_id
-        WHERE rs.ingested_at > now() - INTERVAL {LOOKBACK_MIN * 4} MINUTE
-        GROUP BY rs.trace_id
-        HAVING dateDiff('minute', last_ingested, now()) >= {STUCK_TRACE_MINUTES}
-           AND maxOrNull(rt.reconstructed_at) IS NULL
+        SELECT
+            trace_id,
+            ingested_at,
+            idempotency_key
+        FROM tracing.raw_spans
+        WHERE ingested_at > now() - INTERVAL {LOOKBACK_MIN * 4} MINUTE
+        ORDER BY ingested_at DESC
         """
     ).result_rows
-    return [
-        Alert(
-            alert_type="stuck_trace",
-            key=f"trace:{r[0]}",
-            severity="medium",
-            message=f"Trace {r[0]} appears stuck without reconstruction for >= {STUCK_TRACE_MINUTES}m.",
-            details={"trace_id": r[0], "last_ingested": str(r[1])},
-        )
-        for r in rows
-    ]
+    
+    # Deduplicate spans by idempotency_key
+    seen_keys = {}
+    for trace_id, ingested_at, idempotency_key in spans:
+        dedup_key = idempotency_key if idempotency_key else f"span_{ingested_at}_{trace_id}"
+        
+        if dedup_key not in seen_keys:
+            seen_keys[dedup_key] = (trace_id, ingested_at)
+    
+    # Get max ingested_at per trace
+    trace_last_ingested = {}
+    for trace_id, ingested_at in seen_keys.values():
+        if trace_id not in trace_last_ingested:
+            trace_last_ingested[trace_id] = ingested_at
+        else:
+            if ingested_at > trace_last_ingested[trace_id]:
+                trace_last_ingested[trace_id] = ingested_at
+    
+    # Get reconstructed traces
+    reconstructed = client.query(
+        """
+        SELECT trace_id, reconstructed_at
+        FROM tracing.reconstructed_traces
+        """
+    ).result_rows
+    reconstructed_set = {r[0] for r in reconstructed}
+    
+    # Find stuck traces
+    alerts = []
+    now = datetime.now()
+    for trace_id, last_ingested in trace_last_ingested.items():
+        # Check if trace is NOT reconstructed
+        if trace_id not in reconstructed_set:
+            # Calculate time difference in minutes
+            minutes_since_ingest = (now - last_ingested.replace(tzinfo=None)).total_seconds() / 60
+            
+            if minutes_since_ingest >= STUCK_TRACE_MINUTES:
+                alerts.append(
+                    Alert(
+                        alert_type="stuck_trace",
+                        key=f"trace:{trace_id}",
+                        severity="medium",
+                        message=f"Trace {trace_id} appears stuck without reconstruction for >= {STUCK_TRACE_MINUTES}m.",
+                        details={"trace_id": trace_id, "last_ingested": str(last_ingested)},
+                    )
+                )
+    
+    return alerts
 
 
 def run_loop() -> None:

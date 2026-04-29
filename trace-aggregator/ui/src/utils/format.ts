@@ -24,6 +24,19 @@ export function fmtRelative(iso: string): string {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
+export function fmtDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+    timeZone: "America/Los_Angeles",
+  }).format(d);
+}
+
 // Stable color per agent name. Picks from our palette so it stays on-brand.
 const AGENT_PALETTE = [
   "#C73E1D", // cherry

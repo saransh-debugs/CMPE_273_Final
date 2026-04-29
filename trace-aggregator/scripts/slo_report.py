@@ -38,18 +38,49 @@ def main() -> None:
         print(f"clickhouse_unreachable={e}")
         print("hint=Start ClickHouse first (docker compose up -d)")
         return
-    rows = c.query(
+    
+    # Get all raw spans in the window
+    raw_spans = c.query(
         f"""
         SELECT
-          rs.trace_id,
-          max(rs.ingested_at) AS last_ingested_at,
-          maxOrNull(rt.reconstructed_at) AS last_reconstructed_at
-        FROM tracing.raw_spans rs
-        LEFT JOIN tracing.reconstructed_traces rt ON rs.trace_id = rt.trace_id
-        WHERE rs.ingested_at > now() - INTERVAL {args.minutes} MINUTE
-        GROUP BY rs.trace_id
+            trace_id,
+            ingested_at,
+            idempotency_key
+        FROM tracing.raw_spans
+        WHERE ingested_at > now() - INTERVAL {args.minutes} MINUTE
+        ORDER BY ingested_at DESC
         """
     ).result_rows
+    
+    # Deduplicate by idempotency_key
+    seen_keys = {}
+    for trace_id, ingested_at, idempotency_key in raw_spans:
+        dedup_key = idempotency_key if idempotency_key else f"span_{ingested_at}_{trace_id}"
+        
+        if dedup_key not in seen_keys:
+            seen_keys[dedup_key] = (trace_id, ingested_at)
+    
+    # Get max ingested_at per trace
+    trace_ingested = {}
+    for trace_id, ingested_at in seen_keys.values():
+        if trace_id not in trace_ingested:
+            trace_ingested[trace_id] = ingested_at
+        else:
+            if ingested_at > trace_ingested[trace_id]:
+                trace_ingested[trace_id] = ingested_at
+    
+    # Get reconstructed traces
+    reconstructed_rows = c.query(
+        "SELECT trace_id, reconstructed_at FROM tracing.reconstructed_traces"
+    ).result_rows
+    
+    # Build result rows for processing
+    rows = []
+    reconstructed_map = {r[0]: r[1] for r in reconstructed_rows}
+    
+    for trace_id, ingested_at in trace_ingested.items():
+        reconstructed_at = reconstructed_map.get(trace_id)
+        rows.append((trace_id, ingested_at, reconstructed_at))
 
     lag_ms: List[float] = []
     invalid_lag = 0

@@ -62,6 +62,7 @@ def main() -> None:
         "output_tokens",
         "latency_ms",
         "metadata",
+        "idempotency_key",
     ])
     replay_dir("decision", "tracing.raw_decisions", [
         "timestamp_ms",
@@ -76,6 +77,7 @@ def main() -> None:
         "evidence_refs",
         "candidates_json",
         "metadata",
+        "idempotency_key",
     ])
 
 

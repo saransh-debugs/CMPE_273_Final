@@ -37,6 +37,7 @@ SPAN_COLUMNS = [
     "output_tokens",
     "latency_ms",
     "metadata",
+    "idempotency_key",
 ]
 
 

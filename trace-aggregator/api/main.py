@@ -7,6 +7,7 @@ Run:
 from __future__ import annotations
 
 import json
+from datetime import timezone
 from typing import Optional
 
 import clickhouse_connect
@@ -27,6 +28,16 @@ def _client():
     return clickhouse_connect.get_client(
         host="localhost", port=8123, username="default", password=""
     )
+
+
+def _iso_utc(dt) -> str:
+    if dt is None:
+        return ""
+    if getattr(dt, "tzinfo", None) is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 @app.get("/health")
@@ -84,7 +95,7 @@ def list_traces(
         "total_input_tokens": int(r[3]),
         "total_output_tokens": int(r[4]),
         "error_count": int(r[5]),
-        "reconstructed_at": r[6].isoformat(),
+        "reconstructed_at": _iso_utc(r[6]),
         "input_text": r[7] or "",
     } for r in rows]
 
@@ -114,7 +125,7 @@ def get_trace(trace_id: str):
         "error_count": int(r[5]),
         "dag": json.loads(r[6]),
         "blame": json.loads(r[7]),
-        "reconstructed_at": r[8].isoformat(),
+        "reconstructed_at": _iso_utc(r[8]),
         "input_text": r[9] or "",
     }
     decisions = _query_trace_decisions(trace_id=trace_id, limit=200, offset=0)
@@ -128,15 +139,34 @@ def get_raw_spans(trace_id: str):
     """Raw spans for the timeline view — pre-reconstruction."""
     rows = _client().query(
         """
-        SELECT span_id, parent_span_id, agent_id, vector_clock,
-               event_type, input_tokens, output_tokens, latency_ms,
-               start_time_ms, metadata
-        FROM tracing.raw_spans
-        WHERE trace_id = {trace_id:String}
-        ORDER BY start_time_ms ASC
+         SELECT
+             span_id,
+             parent_span_id,
+             agent_id,
+             vector_clock,
+             event_type,
+             input_tokens,
+             output_tokens,
+             latency_ms,
+             start_time_ms,
+             metadata,
+             idempotency_key,
+             ingested_at
+         FROM tracing.raw_spans
+         WHERE trace_id = {trace_id:String}
+         ORDER BY start_time_ms ASC, ingested_at DESC
         """,
         parameters={"trace_id": trace_id},
     ).result_rows
+    
+    # Deduplicate by idempotency_key, keeping the most recent
+    seen_keys = {}
+    for r in rows:
+        idempotency_key = r[10]
+        dedup_key = idempotency_key if idempotency_key else f"{trace_id}:{r[0]}"
+        if dedup_key not in seen_keys:
+            seen_keys[dedup_key] = r
+    
     return [{
         "span_id": r[0],
         "parent_span_id": r[1],
@@ -148,7 +178,7 @@ def get_raw_spans(trace_id: str):
         "latency_ms": int(r[7]),
         "start_time_ms": int(r[8]),
         "metadata": r[9],
-    } for r in rows]
+    } for r in seen_keys.values()]
 
 
 def _query_trace_decisions(
@@ -189,18 +219,39 @@ def _query_trace_decisions(
         params["metadata_query"] = metadata_query
 
     query = f"""
-        SELECT trace_id, decision_id, source_span_id, actor_agent_id,
-               decision_type, selected_candidate_id, confidence,
-               rationale_summary, evidence_refs, candidates_json,
-               timestamp_ms, metadata
-        FROM tracing.raw_decisions
-        WHERE {' AND '.join(clauses)}
-        ORDER BY timestamp_ms ASC
-        LIMIT {limit} OFFSET {offset}
+         SELECT trace_id,
+             decision_id,
+             source_span_id,
+             actor_agent_id,
+             decision_type,
+             selected_candidate_id,
+             confidence,
+             rationale_summary,
+             evidence_refs,
+             candidates_json,
+             timestamp_ms,
+             metadata,
+             idempotency_key,
+             ingested_at
+         FROM tracing.raw_decisions
+         WHERE {' AND '.join(clauses)}
+         ORDER BY timestamp_ms ASC, ingested_at DESC
         """
     rows = _client().query(query, parameters=params).result_rows
-    out = []
+    
+    # Deduplicate by idempotency_key, keeping the most recent
+    seen_keys = {}
     for r in rows:
+        idempotency_key = r[12]
+        dedup_key = idempotency_key if idempotency_key else f"{r[0]}:{r[1]}"
+        if dedup_key not in seen_keys:
+            seen_keys[dedup_key] = r
+    
+    # Apply limit/offset after deduplication
+    deduped_rows = list(seen_keys.values())[offset:offset + limit]
+    
+    out = []
+    for r in deduped_rows:
         try:
             candidates = json.loads(r[9] or "[]")
         except Exception:
@@ -338,21 +389,66 @@ def aggregate_blame(hours: int = Query(24, ge=1, le=720)):
     rows = _client().query(f"""
         SELECT
             agent_id,
-            count() AS spans,
-            sum(latency_ms) AS total_latency_ms,
-            sum(input_tokens) AS total_input_tokens,
-            sum(output_tokens) AS total_output_tokens,
-            countIf(event_type = 'error') AS error_count
+            latency_ms,
+            input_tokens,
+            output_tokens,
+            event_type,
+            idempotency_key,
+            ingested_at
         FROM tracing.raw_spans
         WHERE ingested_at > now() - INTERVAL {hours} HOUR
-        GROUP BY agent_id
-        ORDER BY total_latency_ms DESC
+        ORDER BY ingested_at DESC
     """).result_rows
-    return [{
-        "agent_id": r[0],
-        "spans": int(r[1]),
-        "total_latency_ms": int(r[2]),
-        "total_input_tokens": int(r[3]),
-        "total_output_tokens": int(r[4]),
-        "error_count": int(r[5]),
-    } for r in rows]
+    
+    # Deduplicate by idempotency_key
+    seen_keys = {}
+    for r in rows:
+        agent_id = r[0]
+        latency_ms = r[1]
+        input_tokens = r[2]
+        output_tokens = r[3]
+        event_type = r[4]
+        idempotency_key = r[5]
+        ingested_at = r[6]
+        
+        # Create span_id from the query context - we need trace_id:span_id
+        # Since we don't have all data, use idempotency_key if present
+        if idempotency_key:
+            dedup_key = idempotency_key
+        else:
+            # For spans without explicit idempotency_key, they shouldn't be deduplicated
+            # This shouldn't happen if collector is working properly
+            dedup_key = f"raw_{ingested_at}_{agent_id}"
+        
+        if dedup_key not in seen_keys:
+            seen_keys[dedup_key] = (agent_id, latency_ms, input_tokens, output_tokens, event_type)
+    
+    # Aggregate by agent_id
+    agent_stats = {}
+    for agent_id, latency_ms, input_tokens, output_tokens, event_type in seen_keys.values():
+        if agent_id not in agent_stats:
+            agent_stats[agent_id] = {
+                "spans": 0,
+                "total_latency_ms": 0,
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
+                "error_count": 0,
+            }
+        agent_stats[agent_id]["spans"] += 1
+        agent_stats[agent_id]["total_latency_ms"] += latency_ms or 0
+        agent_stats[agent_id]["total_input_tokens"] += input_tokens or 0
+        agent_stats[agent_id]["total_output_tokens"] += output_tokens or 0
+        if event_type == "error":
+            agent_stats[agent_id]["error_count"] += 1
+    
+    return [
+        {
+            "agent_id": agent_id,
+            "spans": stats["spans"],
+            "total_latency_ms": int(stats["total_latency_ms"]),
+            "total_input_tokens": int(stats["total_input_tokens"]),
+            "total_output_tokens": int(stats["total_output_tokens"]),
+            "error_count": int(stats["error_count"]),
+        }
+        for agent_id, stats in sorted(agent_stats.items(), key=lambda x: x[1]["total_latency_ms"], reverse=True)
+    ]

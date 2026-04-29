@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS tracing.raw_spans (
     output_tokens UInt32,
     latency_ms    UInt32,
 
-    metadata      String
+    metadata      String,
+    idempotency_key String
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(ingested_at)
 ORDER BY (trace_id, start_time_ms, span_id)
@@ -107,7 +108,8 @@ CREATE TABLE IF NOT EXISTS tracing.raw_decisions (
 
     evidence_refs Array(String),
     candidates_json String,
-    metadata String
+    metadata String,
+    idempotency_key String
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(ingested_at)
 ORDER BY (trace_id, timestamp_ms, decision_id)
@@ -187,6 +189,16 @@ def setup() -> None:
     print("→ Ensuring input_text column on reconstructed_traces...")
     try:
         client.command("ALTER TABLE tracing.reconstructed_traces ADD COLUMN IF NOT EXISTS input_text String DEFAULT ''")
+    except Exception:
+        pass
+
+    print("→ Ensuring idempotency_key columns on raw tables...")
+    try:
+        client.command("ALTER TABLE tracing.raw_spans ADD COLUMN IF NOT EXISTS idempotency_key String DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        client.command("ALTER TABLE tracing.raw_decisions ADD COLUMN IF NOT EXISTS idempotency_key String DEFAULT ''")
     except Exception:
         pass
 
