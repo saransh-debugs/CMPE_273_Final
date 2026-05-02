@@ -98,6 +98,34 @@ export interface DecisionEvent {
   metadata: string;
 }
 
+export interface SLOStatus {
+  name: string;
+  title: string;
+  signal: string;
+  window_minutes: number;
+  threshold: number;
+  comparison: string;
+  unit: string;
+  value: number;
+  passing: boolean;
+  sample_count: number;
+  notes: string;
+}
+
+export interface SLOHistoryPoint {
+  evaluated_at: string;
+  value: number;
+  passing: boolean;
+  sample_count: number;
+  notes: string;
+}
+
+export interface SLOResponse {
+  overall: "pass" | "fail" | "unknown";
+  statuses: SLOStatus[];
+  history: Record<string, SLOHistoryPoint[]>;
+}
+
 export interface RootCauseEdge {
   decision_id: string;
   source_span_id: string;
@@ -110,4 +138,7 @@ export interface RootCauseEdge {
   impact_latency_ms: number;
   impact_tokens: number;
   impact_error_count: number;
+  impact_score: number;
+  uncertainty: string;
+  chain_rank?: number;
 }

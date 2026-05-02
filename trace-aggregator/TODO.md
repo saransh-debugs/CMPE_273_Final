@@ -265,12 +265,67 @@ Each task includes scope, dependencies, deliverables, and acceptance criteria.
 - Step 5: Raw rows=8, Unique keys=4 (duplicates present)
 - Step 6: Span count=4 (deduped correctly) ✅
 
-### ENG-04: Backpressure and Collector Metrics
+### ENG-04: Backpressure and Collector Metrics [DONE]
 
 - **Scope:** Expose queue depth, accept/reject counts, flush latency, retries.
 - **Dependencies:** ENG-01.
-- **Deliverables:** Metrics endpoint and structured operational logs.
-- **Acceptance:** Overload behavior is measurable and auditable.
+- **Deliverables:** Metrics endpoint and structured operational logs. (Completed)
+- **Acceptance:** Overload behavior is measurable and auditable. (Met)
+
+#### ENG-04 Implementation Details
+
+**New modules:**
+- `collector/metrics.py` — singleton `METRICS` (CollectorMetrics) with per-writer
+  `WriterMetrics` (counters: accepted/rejected/queue_full/flush_attempts/
+  flush_success/flush_failures/rows_flushed/replay_enqueued; gauges: queue_depth,
+  wal_backlog, acceptance_rate, flush_success_rate; histograms: flush_latency_ms,
+  flush_batch_size with bounded ring buffer and p50/p95/p99/max).
+- `collector/metrics_server.py` — stdlib-only async HTTP server (no new deps).
+  Exposes:
+  - `GET /metrics` JSON snapshot (machine readable, also consumed by SLO evaluator)
+  - `GET /metrics/prom` Prometheus text exposition (counters + gauges)
+  - `GET /healthz` readiness
+
+**Wiring:**
+- `collector/writer.py` — every WAL write/queue-full/replay enqueue and every
+  flush attempt updates `WriterMetrics`. Flush latency is timed around
+  `client.insert`. `attach_queue_depth` and `attach_wal_backlog` give live gauges.
+- `collector/server.py` — servicer increments `METRICS.spans_received/dropped`
+  and `decisions_received/dropped` mirrors. `_ops_log_loop` emits a structured
+  one-line summary every `OPS_LOG_INTERVAL_SEC` (default 30s).
+- `start_metrics_server()` is started alongside the gRPC server and shut down
+  on signal.
+
+**Tunables (env vars):**
+- `METRICS_BIND_HOST` (default `0.0.0.0`)
+- `METRICS_BIND_PORT` (default `9090`)
+- `METRICS_HIST_WINDOW` (default `1024`) — observations kept per histogram
+- `OPS_LOG_INTERVAL_SEC` (default `30`)
+
+#### ENG-04 Verification Steps (Manual)
+
+1. Start collector: `python -m collector.server`
+2. Emit traffic: `python -m demo.pipeline`
+3. Read JSON snapshot: `curl -s http://localhost:9090/metrics | jq .`
+   - Expected: `writers.span.accepted` rises, `acceptance_rate` ~1.0,
+     `flush_success_rate` ~1.0 once ClickHouse is up.
+4. Read Prometheus exposition:
+   `curl -s http://localhost:9090/metrics/prom | head -20`
+5. Backpressure test: stop ClickHouse, emit traffic, watch the collector
+   logs for the periodic `ops/span ... flush_fail=N wal_backlog=M` line.
+   `acceptance_rate` should stay 1.0 (WAL still accepts), `flush_success_rate`
+   should drop, `wal_backlog` should grow.
+6. Recovery: `docker compose start clickhouse && python -m collector.replay_wal`.
+   `wal_backlog` should drain to 0, `raw_spans` count should grow by the
+   buffered amount.
+
+**Validated end-to-end on 2026-05-02:**
+- 18 spans + 18 decisions accepted, 0 rejected, 8+7 flushes succeeded,
+  flush p95 ~140ms, all rates at 1.0000 on healthy system.
+- Failure injection: `accepted=36`, `rejected=0`, `wal_backlog=18`,
+  `flush_success_rate=0.53` while CH was down.
+- Recovery: WAL drained to 0 via `collector.replay_wal`, `raw_spans` count
+  grew from 18 → 216 across the demo + replay.
 
 ### ENG-05: Engine Determinism Corpus
 
@@ -321,12 +376,117 @@ Each task includes scope, dependencies, deliverables, and acceptance criteria.
 - **Deliverables:** Incident model and dedupe key strategy.
 - **Acceptance:** Repeated anomalies do not create alert storms.
 
-### ENG-12: SLO Definition and Reporting
+### ENG-12: SLO Definition and Reporting [DONE]
 
 - **Scope:** Track ingest success, reconstruction lag, API latency, completion rates.
 - **Dependencies:** ENG-04.
-- **Deliverables:** SLO spec + periodic reporting pipeline.
-- **Acceptance:** SLO status is visible and alert-driven.
+- **Deliverables:** SLO spec + periodic reporting pipeline. (Completed)
+- **Acceptance:** SLO status is visible and alert-driven. (Met)
+
+#### ENG-12 Implementation Details
+
+**New package: `slo/`**
+- `slo/spec.py` — typed `SLOSpec` dataclass + the `SLOS` catalog. Six SLOs:
+  - `ingest_acceptance` ≥ 99.9% (15m, source: collector `/metrics`)
+  - `flush_success` ≥ 99% (15m, source: collector `/metrics`)
+  - `reconstruction_lag_p95` ≤ 60,000ms (60m)
+  - `reconstruction_lag_p99` ≤ 120,000ms (60m)
+  - `trace_completion` ≥ 99% (engine-aligned hot window, default 300s)
+  - `api_latency_p95` ≤ 500ms (5m, synthetic probe)
+- `slo/evaluator.py` — pulls signals from collector `/metrics` (acceptance,
+  flush success), ClickHouse (reconstruction lags + completion), and a synthetic
+  probe against the FastAPI server. Returns `SLOStatus` per spec.
+- `slo/worker.py` — periodic loop that evaluates and writes status rows to
+  `tracing.slo_status`. Supports `--once` for cron mode.
+
+**Reconstruction lag measurement** — non-obvious, documented here:
+
+`engine.worker` re-reconstructs every "active" trace on every 2s tick for up
+to `LOOKBACK_SEC` after its last span. A naive `max(reconstructed_at) -
+max(ingested_at)` therefore measures engine churn (often 60–80s), not the
+user-visible time-to-first-reconstruction (TTFR). To fix this:
+
+1. Schema: added immutable `first_reconstructed_at DateTime64(3)` column to
+   `tracing.reconstructed_traces` (default `toDateTime64(0,3,'UTC')` so old
+   rows are detectable as "never populated").
+2. Engine (`engine/worker.py`): on every overwrite, looks up the existing
+   `first_reconstructed_at` and carries it forward — only the very first
+   reconstruction sets it. Bad historical rows where `first > reconstructed`
+   are clamped.
+3. Evaluator: TTFR for traces whose last span preceded the first rebuild;
+   staleness vs. latest `reconstructed_at` for warm traces that received
+   incremental spans after the first rebuild.
+4. Hot-window eligibility: `SLO_RECON_ACTIVE_LOOKBACK_SEC` (default 120s)
+   excludes old backlog traces from p95 — keeps the SLO sensitive to *now*,
+   not historical drag.
+
+**Schema:** `tracing.slo_status` (MergeTree, partitioned by day, ordered by
+slo_name+evaluated_at). New column `first_reconstructed_at` on
+`tracing.reconstructed_traces`. Both applied idempotently in `db/init_db.py`.
+
+**API:** `GET /slo` returns current statuses + recent history per SLO.
+Computed on demand; history pulled from `tracing.slo_status` if the worker
+has been running.
+
+**UI:** `/slo` page with overall pass/fail banner, per-SLO cards (value vs.
+target, sample count, notes), and a 20-bin sparkline of recent evaluations.
+Linked from header nav (`ui/src/pages/SLOPage.tsx`,
+`ui/src/components/Header.tsx`).
+
+**Alerting:** New `_rule_slo_breach` in `alerting/worker.py` pages on K-of-N
+sustained failures (defaults: 3 of last 5). Tunable via
+`ALERT_SLO_LOOKBACK` and `ALERT_SLO_BREACH_THRESHOLD`. Designed so single
+transient eval blips don't page.
+
+**Updated:** `scripts/slo_report.py` delegates to `slo.evaluator` and
+prints the full catalog with PASS/FAIL per SLO. Supports `--json` and
+`--persist`. Self-bootstraps `sys.path` so it runs as both
+`python scripts/slo_report.py` and `python -m scripts.slo_report` from the
+`trace-aggregator/` root.
+
+**Tunables (env vars):**
+- `COLLECTOR_METRICS_URL` (default `http://localhost:9090/metrics`)
+- `API_PROBE_URL` (default `http://localhost:8000`)
+- `API_PROBE_SAMPLES` (default `5`) — synthetic probe samples per eval
+- `SLO_POLL_INTERVAL_SEC` (default `60`) — worker cadence
+- `SLO_RECON_ACTIVE_LOOKBACK_SEC` (default `120`) — recon hot-window
+- `SLO_TRACE_COMPLETION_ACTIVE_SEC` (default `300`) — match `engine.worker.LOOKBACK_SEC`
+- `ALERT_SLO_LOOKBACK` (default `5`), `ALERT_SLO_BREACH_THRESHOLD` (default `3`)
+
+#### ENG-12 Verification Steps (Manual)
+
+> All commands assume `cd trace-aggregator && source .venv/bin/activate`
+> (or use `.venv/bin/python` directly).
+
+1. Apply schema (idempotent): `python -m db.init_db`
+   - Expected: `slo_status` listed in tables.
+2. Start collector (terminal 1), engine (2), API (3), UI (4) per CLAUDE.md.
+3. Emit traffic: `python -m demo.pipeline`
+4. One-shot evaluation: `python -m slo.worker --once`
+   - Expected: 6 lines, each `PASS …` on a healthy system. A row per SLO
+     inserted into `tracing.slo_status`.
+5. Persistent worker: `python -m slo.worker` (default interval 60s).
+6. CLI report: `python scripts/slo_report.py`
+   - Returns exit code 0 if all SLOs pass, 1 if any fail. `--json` for
+     machine output, `--persist` to also write to `slo_status`.
+7. API: `curl -s http://localhost:8000/slo | jq .overall` → `"pass"`.
+8. UI: open `http://localhost:5173/slo`. Expected: PASS banner, 6 cards,
+   sparklines once the worker has run a few cycles.
+9. Failure injection (proves alerting works):
+   ```bash
+   docker compose stop clickhouse
+   python -m demo.pipeline                   # collector still ACKs (WAL durable)
+   python -m slo.worker --once               # flush_success drops to 0
+   python -m slo.worker --once               # second eval — adds to history
+   python -m slo.worker --once               # third — meets 3-of-5 threshold
+   python -m alerting.worker                 # → ALERT HIGH | slo_breach …
+   docker compose start clickhouse
+   python -m collector.replay_wal            # drains buffered spans
+   ```
+10. Stale history caveat: if you change thresholds or the measurement
+    method, old `slo_status` rows can keep firing the K-of-N alert. Truncate
+    with `TRUNCATE TABLE tracing.slo_status` (POST via the driver, not
+    GET — ClickHouse rejects mutations over HTTP GET).
 
 ### ENG-13: Security Baseline (Auth + Tenancy)
 

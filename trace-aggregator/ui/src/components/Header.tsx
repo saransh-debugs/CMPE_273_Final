@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom";
 const links = [
   { to: "/", label: "Traces", end: true },
   { to: "/blame", label: "Blame" },
+  { to: "/slo", label: "SLO" },
 ];
 
 export function Header() {

@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Dict, List, Set, Tuple
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Set, Tuple
 
 import clickhouse_connect
 
@@ -24,6 +27,41 @@ _logger = logging.getLogger("engine.worker")
 
 POLL_INTERVAL_SEC = 2.0
 LOOKBACK_SEC = 300  # only consider traces that received spans recently
+# Parallel reconstruction uses one ClickHouse client per task (connections are not shared).
+MAX_RECON_WORKERS = max(1, int(os.environ.get("ENGINE_RECON_MAX_WORKERS", "4")))
+
+
+def _is_epoch_placeholder(dt: Optional[datetime]) -> bool:
+    """True when first_reconstructed_at was never populated (migration / old rows)."""
+    if dt is None:
+        return True
+    return dt.year <= 1971
+
+
+def _as_utc_aware(dt: datetime) -> datetime:
+    """ClickHouse-connect encodes naive datetimes as local time — always insert aware UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _resolve_first_reconstructed_at(client, trace_id: str, insert_ts_utc: datetime) -> datetime:
+    """Carry forward immutable first reconstruction time across ReplacingMergeTree updates."""
+    rows = client.query(
+        """
+        SELECT first_reconstructed_at, reconstructed_at
+        FROM tracing.reconstructed_traces FINAL
+        WHERE trace_id = {trace_id:String}
+        LIMIT 1
+        """,
+        parameters={"trace_id": trace_id},
+    ).result_rows
+    if not rows:
+        return insert_ts_utc
+    prev_first, prev_rec = rows[0][0], rows[0][1]
+    if _is_epoch_placeholder(prev_first):
+        return _as_utc_aware(prev_rec)
+    return _as_utc_aware(prev_first)
 
 
 @dataclass
@@ -49,11 +87,18 @@ def _connect():
 
 
 def find_active_traces(client) -> List[str]:
-    """Trace IDs that received spans in the lookback window."""
+    """Trace IDs that received spans in the lookback window.
+
+    Ordered by newest last-ingest first so a sequential reconstruct loop clears
+    hot traces before backlog. Otherwise stale IDs in the same window can soak
+    up poll budget and falsely inflate reconstruction lag against the SLO.
+    """
     rows = client.query(f"""
-        SELECT DISTINCT trace_id
+        SELECT trace_id
         FROM tracing.raw_spans
         WHERE ingested_at > now() - INTERVAL {LOOKBACK_SEC} SECOND
+        GROUP BY trace_id
+        ORDER BY max(ingested_at) DESC
     """).result_rows
     return [r[0] for r in rows]
 
@@ -428,10 +473,19 @@ def reconstruct_one(client, trace_id: str) -> dict:
         "input_text": input_text,
     }
 
+    # Timezone-aware UTC: naive datetimes are interpreted as local time by clickhouse-connect
+    # during insert (.timestamp()), which corrupts DateTime64 relative to Collector/CH defaults.
+    insert_ts = datetime.now(timezone.utc)
+    anchor_first = _as_utc_aware(_resolve_first_reconstructed_at(client, trace_id, insert_ts))
+    # Bad historical rows could leave first_reconstructed_at > reconstructed_at; never allow that.
+    if anchor_first > insert_ts:
+        anchor_first = insert_ts
+
     client.insert(
         "tracing.reconstructed_traces",
         [(
             payload["trace_id"],
+            insert_ts,
             payload["span_count"],
             payload["total_latency_ms"],
             payload["total_input_tokens"],
@@ -440,16 +494,31 @@ def reconstruct_one(client, trace_id: str) -> dict:
             payload["dag_json"],
             payload["blame_json"],
             payload["input_text"],
+            anchor_first,
         )],
         column_names=[
-            "trace_id", "span_count", "total_latency_ms",
-            "total_input_tokens", "total_output_tokens", "error_count",
-            "dag_json", "blame_json", "input_text",
+            "trace_id",
+            "reconstructed_at",
+            "span_count",
+            "total_latency_ms",
+            "total_input_tokens",
+            "total_output_tokens",
+            "error_count",
+            "dag_json",
+            "blame_json",
+            "input_text",
+            "first_reconstructed_at",
         ],
     )
     _write_decision_edges(client, trace_id, decisions, spans, nodes)
     payload["decision_count"] = len(decisions)
     return payload
+
+
+def _reconstruct_one_task(trace_id: str) -> Tuple[str, dict]:
+    """Isolated CH client per thread for concurrent reconstruct_one runs."""
+    c = _connect()
+    return trace_id, reconstruct_one(c, trace_id)
 
 
 def run_loop() -> None:
@@ -463,15 +532,23 @@ def run_loop() -> None:
     while True:
         try:
             traces = find_active_traces(client)
-            for tid in traces:
-                p = reconstruct_one(client, tid)
-                _logger.info(
-                    "Reconstructed trace=%s spans=%d decisions=%d latency=%dms errors=%d",
-                    tid, p.get("span_count", 0),
-                    p.get("decision_count", 0),
-                    p.get("total_latency_ms", 0),
-                    p.get("error_count", 0),
-                )
+            if traces:
+                workers = min(MAX_RECON_WORKERS, len(traces))
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    futures = [pool.submit(_reconstruct_one_task, tid) for tid in traces]
+                    for fut in as_completed(futures):
+                        try:
+                            tid, p = fut.result()
+                        except Exception:
+                            _logger.exception("Single-trace reconstruct failed")
+                            continue
+                        _logger.info(
+                            "Reconstructed trace=%s spans=%d decisions=%d latency=%dms errors=%d",
+                            tid, p.get("span_count", 0),
+                            p.get("decision_count", 0),
+                            p.get("total_latency_ms", 0),
+                            p.get("error_count", 0),
+                        )
         except Exception as e:  # noqa: BLE001
             _logger.exception("Engine loop error: %s", e)
             # Reconnect on the next iteration in case the client is borked.

@@ -86,7 +86,11 @@ CREATE TABLE IF NOT EXISTS tracing.reconstructed_traces (
     blame_json      String,
 
     -- The user prompt / task description that initiated this trace
-    input_text      String DEFAULT ''
+    input_text      String DEFAULT '',
+
+    -- Wall time of the first reconstruction insert for this trace (carried forward
+    -- on ReplacingMergeTree updates so merges do not erase time-to-first-DAG).
+    first_reconstructed_at DateTime64(3) DEFAULT toDateTime64(0, 3, 'UTC')
 ) ENGINE = ReplacingMergeTree(reconstructed_at)
 ORDER BY trace_id
 """
@@ -135,6 +139,24 @@ CREATE TABLE IF NOT EXISTS tracing.decision_edges (
     reconstructed_at DateTime64(3) DEFAULT now64(3)
 ) ENGINE = ReplacingMergeTree(reconstructed_at)
 ORDER BY (trace_id, decision_id, target_span_id)
+"""
+
+SCHEMA_SLO_STATUS = """
+CREATE TABLE IF NOT EXISTS tracing.slo_status (
+    evaluated_at DateTime64(3) DEFAULT now64(3),
+    slo_name LowCardinality(String),
+    title String,
+    signal LowCardinality(String),
+    window_minutes UInt32,
+    threshold Float64,
+    comparison LowCardinality(String),
+    value Float64,
+    passing UInt8,
+    sample_count UInt64,
+    notes String
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMMDD(evaluated_at)
+ORDER BY (slo_name, evaluated_at)
 """
 
 SCHEMA_DECISION_REASON_CHAINS = """
@@ -186,9 +208,21 @@ def setup() -> None:
     print("→ Creating decision_reason_chains table...")
     client.command(SCHEMA_DECISION_REASON_CHAINS)
 
+    print("→ Creating slo_status table...")
+    client.command(SCHEMA_SLO_STATUS)
+
     print("→ Ensuring input_text column on reconstructed_traces...")
     try:
         client.command("ALTER TABLE tracing.reconstructed_traces ADD COLUMN IF NOT EXISTS input_text String DEFAULT ''")
+    except Exception:
+        pass
+
+    print("→ Ensuring first_reconstructed_at on reconstructed_traces...")
+    try:
+        client.command(
+            "ALTER TABLE tracing.reconstructed_traces "
+            "ADD COLUMN IF NOT EXISTS first_reconstructed_at DateTime64(3) DEFAULT toDateTime64(0, 3, 'UTC')"
+        )
     except Exception:
         pass
 

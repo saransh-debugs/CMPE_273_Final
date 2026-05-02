@@ -18,6 +18,8 @@ from typing import List, Sequence, Tuple
 
 import clickhouse_connect
 
+from .metrics import METRICS
+
 _logger = logging.getLogger("collector.writer")
 
 # Tunables
@@ -80,6 +82,15 @@ class BatchWriter:
         self._client = None
         self._stopped = False
         self._wal_dir = _wal_base_dir(self.item_name)
+        self._metrics = METRICS.writer(self.item_name)
+        self._metrics.attach_queue_depth(self._queue.qsize)
+        self._metrics.attach_wal_backlog(self._wal_backlog_size)
+
+    def _wal_backlog_size(self) -> int:
+        try:
+            return sum(1 for _ in self._wal_dir.glob("*.json"))
+        except Exception:
+            return 0
 
     def _connect(self):
         if self._client is None:
@@ -104,12 +115,15 @@ class BatchWriter:
             wal_path = self._write_wal(row)
         except Exception as e:  # WAL failure -> reject
             _logger.exception("WAL write failed for %s: %s", self.item_name, e)
+            self._metrics.inc_rejected()
             return False
 
+        self._metrics.inc_accepted()
         try:
             self._queue.put_nowait((row, str(wal_path)))
         except asyncio.QueueFull:
             _logger.warning("In-memory queue full for %s; persisted to WAL=%s", self.item_name, wal_path)
+            self._metrics.inc_queue_full()
             # Durable on-disk; will be replayed from WAL. Still *accept*.
             return True
         return True
@@ -156,6 +170,7 @@ class BatchWriter:
             try:
                 # best-effort enqueue; if full leave it on disk for later
                 self._queue.put_nowait((row, str(p)))
+                self._metrics.inc_replay(1)
             except asyncio.QueueFull:
                 _logger.info("Queue full while replaying WAL; leaving %s on disk", p)
                 return
@@ -188,6 +203,7 @@ class BatchWriter:
             return
         rows = [it[0] for it in items]
         wal_paths = [it[1] for it in items]
+        t0 = time.monotonic()
         try:
             client = self._connect()
             # clickhouse-connect is synchronous; offload to a thread so we
@@ -198,7 +214,12 @@ class BatchWriter:
                 rows,
                 column_names=self.columns,
             )
-            _logger.info("Flushed %d %ss to ClickHouse (%s)", len(rows), self.item_name, self.table)
+            latency_ms = (time.monotonic() - t0) * 1000.0
+            self._metrics.record_flush(batch_size=len(rows), latency_ms=latency_ms, ok=True)
+            _logger.info(
+                "Flushed %d %ss to ClickHouse (%s) in %.1fms",
+                len(rows), self.item_name, self.table, latency_ms,
+            )
             # remove WAL files for items we've persisted
             for p in wal_paths:
                 try:
@@ -206,6 +227,8 @@ class BatchWriter:
                 except Exception:
                     _logger.debug("Failed to remove WAL file %s after flush", p)
         except Exception as e:  # noqa: BLE001
+            latency_ms = (time.monotonic() - t0) * 1000.0
+            self._metrics.record_flush(batch_size=len(rows), latency_ms=latency_ms, ok=False)
             _logger.exception("Flush failed (%d %ss left on WAL): %s", len(rows), self.item_name, e)
             # Reset client so next attempt reconnects
             self._client = None

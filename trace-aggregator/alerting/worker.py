@@ -30,6 +30,9 @@ RUNAWAY_TOKENS_THRESHOLD = int(os.environ.get("ALERT_RUNAWAY_TOKENS", "4000"))
 ERROR_BURST_THRESHOLD = int(os.environ.get("ALERT_ERROR_BURST", "3"))
 STUCK_TRACE_MINUTES = int(os.environ.get("ALERT_STUCK_TRACE_MIN", "5"))
 WEBHOOK_URL = os.environ.get("ALERT_WEBHOOK_URL", "").strip()
+# Persistent-breach alerting: at least N of the last M evals must fail before we page.
+SLO_BREACH_LOOKBACK = int(os.environ.get("ALERT_SLO_LOOKBACK", "5"))
+SLO_BREACH_THRESHOLD = int(os.environ.get("ALERT_SLO_BREACH_THRESHOLD", "3"))
 
 
 @dataclass
@@ -197,6 +200,66 @@ def _rule_stuck_traces(client) -> List[Alert]:
     return alerts
 
 
+def _rule_slo_breach(client) -> List[Alert]:
+    """Alert when an SLO has failed in >= SLO_BREACH_THRESHOLD of its last
+    SLO_BREACH_LOOKBACK evaluations.
+
+    Why a sustained-failure rule instead of single-eval: SLO probes can be
+    noisy (cold caches, transient ClickHouse latency). A K-of-N gate keeps
+    false pages low while still catching real budget burn.
+    """
+    try:
+        rows = client.query(
+            f"""
+            SELECT slo_name, title, value, passing, threshold, comparison, evaluated_at
+            FROM (
+                SELECT *,
+                       row_number() OVER (PARTITION BY slo_name ORDER BY evaluated_at DESC) AS rn
+                FROM tracing.slo_status
+            )
+            WHERE rn <= {SLO_BREACH_LOOKBACK}
+            ORDER BY slo_name, evaluated_at DESC
+            """
+        ).result_rows
+    except Exception as e:  # noqa: BLE001
+        # Table may not exist yet (worker not started). Stay quiet.
+        _logger.debug("slo_status not queryable: %s", e)
+        return []
+
+    by_slo: Dict[str, List] = {}
+    for r in rows:
+        by_slo.setdefault(r[0], []).append(r)
+
+    alerts: List[Alert] = []
+    for slo_name, recent in by_slo.items():
+        if len(recent) < SLO_BREACH_THRESHOLD:
+            continue
+        failing = [r for r in recent if int(r[3]) == 0]
+        if len(failing) >= SLO_BREACH_THRESHOLD:
+            latest = recent[0]
+            alerts.append(
+                Alert(
+                    alert_type="slo_breach",
+                    key=f"slo:{slo_name}",
+                    severity="high",
+                    message=(
+                        f"SLO '{latest[1]}' failed {len(failing)}/{len(recent)} recent evaluations "
+                        f"(latest value={float(latest[2]):.4f} {latest[5]} {float(latest[4]):.4f})."
+                    ),
+                    details={
+                        "slo_name": slo_name,
+                        "failed_recent": len(failing),
+                        "evaluated_recent": len(recent),
+                        "latest_value": float(latest[2]),
+                        "threshold": float(latest[4]),
+                        "comparison": latest[5],
+                        "evaluated_at": str(latest[6]),
+                    },
+                )
+            )
+    return alerts
+
+
 def run_loop() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s | %(message)s")
     client = _connect()
@@ -208,6 +271,7 @@ def run_loop() -> None:
             alerts.extend(_rule_runaway_tokens(client))
             alerts.extend(_rule_error_burst(client))
             alerts.extend(_rule_stuck_traces(client))
+            alerts.extend(_rule_slo_breach(client))
             now = time.time()
             for a in alerts:
                 dedupe_key = f"{a.alert_type}:{a.key}"

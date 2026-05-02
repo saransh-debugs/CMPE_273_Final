@@ -4,6 +4,7 @@ import type {
   GlobalBlameRow,
   DecisionEvent,
   RootCauseEdge,
+  SLOResponse,
 } from "./types";
 
 // Vite proxies /api/* to the FastAPI server in dev (see vite.config.ts).
@@ -31,4 +32,5 @@ export const api = {
     get<RootCauseEdge[]>(`/traces/${id}/root-cause`),
   globalBlame: (hours = 24) =>
     get<GlobalBlameRow[]>(`/agents/blame?hours=${hours}`),
+  slo: (historyLimit = 20) => get<SLOResponse>(`/slo?history_limit=${historyLimit}`),
 };

@@ -383,6 +383,54 @@ def get_root_cause(
     ]
 
 
+@app.get("/slo")
+def get_slo_status(history_limit: int = Query(20, ge=1, le=500)):
+    """Current SLO status + recent history per SLO.
+
+    Live status is computed on demand (collector /metrics + ClickHouse).
+    History is read from tracing.slo_status if the worker has been running.
+    """
+    from slo.evaluator import evaluate_all  # local import to avoid hard dep on import
+
+    try:
+        statuses = evaluate_all(_client())
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, f"SLO evaluation failed: {e}")
+
+    history: dict = {}
+    try:
+        rows = _client().query(
+            f"""
+            SELECT slo_name, evaluated_at, value, passing, sample_count, notes
+            FROM tracing.slo_status
+            ORDER BY evaluated_at DESC
+            LIMIT {history_limit * len(statuses) if statuses else history_limit}
+            """
+        ).result_rows
+        for slo_name, evaluated_at, value, passing, sample_count, notes in rows:
+            history.setdefault(slo_name, []).append({
+                "evaluated_at": _iso_utc(evaluated_at),
+                "value": float(value),
+                "passing": bool(passing),
+                "sample_count": int(sample_count),
+                "notes": notes,
+            })
+        for k in history:
+            history[k] = history[k][:history_limit]
+    except Exception:
+        # Table may not exist yet — fall back to empty history.
+        history = {}
+
+    overall = "pass" if statuses and all(s.passing for s in statuses) else (
+        "fail" if statuses else "unknown"
+    )
+    return {
+        "overall": overall,
+        "statuses": [s.as_dict() for s in statuses],
+        "history": history,
+    }
+
+
 @app.get("/agents/blame")
 def aggregate_blame(hours: int = Query(24, ge=1, le=720)):
     """Cross-trace agent ranking — useful for the global Blame leaderboard."""
