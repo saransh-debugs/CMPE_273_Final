@@ -327,12 +327,31 @@ Each task includes scope, dependencies, deliverables, and acceptance criteria.
 - Recovery: WAL drained to 0 via `collector.replay_wal`, `raw_spans` count
   grew from 18 → 216 across the demo + replay.
 
-### ENG-05: Engine Determinism Corpus
+### ENG-05: Engine Determinism Corpus [DONE]
 
 - **Scope:** Golden tests for fan-out/fan-in, out-of-order, missing parent, duplicate spans.
-- **Dependencies:** None. 
-- **Deliverables:** Deterministic test corpus and checks.
-- **Acceptance:** Repeated runs yield deterministic DAG output.
+- **Dependencies:** None.
+- **Deliverables:** Deterministic test corpus and checks. (Completed)
+- **Acceptance:** Repeated runs yield deterministic DAG output. (Met)
+
+#### ENG-05 Implementation Details
+
+Added 12 new tests to `engine/tests.py` (determinism corpus section):
+
+- `test_out_of_order_arrival` — all 6 permutations of a 3-span chain produce identical structure
+- `test_three_way_fan_in` — 3 parallel branches merging to one collector; verifies `explicit_plus_fanin` resolution and 3 parent_ids
+- `test_orphan_parent` — `parent_span_id` pointing to a missing span falls back to vector clock inference
+- `test_concurrent_spans_are_roots` — two causally unrelated spans (neither clock precedes the other) are both roots
+- `test_single_span_trace` — trivial edge case; root with no children, `parent_resolution = "root"`
+- `test_deep_linear_chain` — 10-hop chain; every parent→child link and root verified
+- `test_determinism_repeated` — `serialize_dag(reconstruct_dag(spans))` called 50× on the fanout pattern; all results bit-identical
+- `test_fanout_fanin_golden` — explicit golden assertions for the canonical orchestrator→parallel→merge pattern including `parent_resolution` values
+- `test_blame_error_weight` — agent with 3 errors gets higher blame than agent with equal latency/tokens but no errors
+- `test_blame_single_agent` — one agent owning all spans; `blame_score = 80.0` (all latency + all tokens, no errors)
+- `test_blame_zero_activity` — spans with 0 latency/tokens; no crash, all scores = 0
+- `test_serialize_dag_stable_ordering` — two spans with identical `start_time_ms`; span_id tiebreak is stable across 30 calls
+
+Run: `python -m engine.tests`
 
 ### ENG-06: Root-Cause Attribution Model v2
 
