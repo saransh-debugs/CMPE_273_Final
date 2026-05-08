@@ -92,7 +92,14 @@ FastAPI query layer (port 8000) ──▶ UI (Vite, port 5173)
 
 ### 1. Instrumentation
 
-The SDK is one decorator. Wrap any LangGraph node:
+The SDK now has two layers:
+
+- **Framework-agnostic core** for trace/span lifecycle and decision emission.
+- **LangGraph adapter** via `@instrument_node` for drop-in node instrumentation.
+
+#### LangGraph adapter (unchanged behavior)
+
+Wrap any LangGraph node:
 
 ```python
 from sdk import instrument_node, new_trace_context
@@ -111,6 +118,43 @@ app.invoke(state)
 ```
 
 The decorator handles vector clock progression, span generation, and shipment to the collector. Spans are sent on a background thread — agent latency is unaffected even if the collector is offline.
+
+#### Framework-agnostic core (no LangGraph required)
+
+```python
+from sdk import begin_span, build_span, emit_span
+
+def run_step(step_fn, payload):
+    ctx = begin_span(
+        agent_name="custom_worker",
+        trace_id=payload.get("_trace_id"),
+        vector_clock=payload.get("_vector_clock"),
+        parent_span_id=payload.get("_parent_span_id"),
+    )
+    err = None
+    result = None
+    state = dict(payload)
+    try:
+        result = step_fn(payload)
+    except BaseException as e:
+        err = e
+    span = build_span(
+        ctx=ctx,
+        agent_name="custom_worker",
+        event_type="tool_use",
+        state=state,
+        result=result,
+        error=err,
+    )
+    emit_span(span)
+    if err:
+        raise err
+    return result, {
+        "_trace_id": ctx.trace_id,
+        "_vector_clock": ctx.vector_clock,
+        "_parent_span_id": ctx.span_id,
+    }
+```
 
 ### 2. Causal reconstruction
 

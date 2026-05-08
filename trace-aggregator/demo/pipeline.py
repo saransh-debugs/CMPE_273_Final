@@ -29,6 +29,13 @@ from typing import Annotated, Any, Dict, List, TypedDict
 from langgraph.graph import StateGraph, END
 
 from sdk import emit_decision, instrument_node, new_trace_context
+from sdk.core import register_coverage_point, mark_covered
+
+register_coverage_point("orchestrator_dispatch", "orchestrator fans out to research+coder")
+register_coverage_point("research_tool_select", "research agent selects LLM tool")
+register_coverage_point("coder_tool_select", "coder agent selects coding tool")
+register_coverage_point("coder_error_halt", "coder halts on hallucinated import")
+register_coverage_point("reviewer_route", "reviewer routes to next branch")
 
 
 # --- State -------------------------------------------------------------------
@@ -194,11 +201,18 @@ def _decision_from_llm(state: AgentState) -> Dict[str, Any]:
     return parsed
 
 
-def _maybe_emit_decision(state: AgentState, payload: Dict[str, Any]) -> None:
+def _maybe_emit_decision(
+    state: AgentState,
+    payload: Dict[str, Any],
+    coverage_point: str = "",
+) -> None:
     trace_id = str(state.get("_trace_id", ""))
     source_span_id = str(state.get("_parent_span_id", ""))
     if not trace_id:
         return
+    meta = dict(payload.get("metadata") or {})
+    if coverage_point:
+        meta["coverage_point"] = coverage_point
     emit_decision(
         trace_id=trace_id,
         source_span_id=source_span_id,
@@ -209,8 +223,10 @@ def _maybe_emit_decision(state: AgentState, payload: Dict[str, Any]) -> None:
         rationale_summary=str(payload.get("rationale_summary", "decision emitted")),
         evidence_refs=[str(x) for x in payload.get("evidence_refs", [])],
         candidates=payload.get("candidates", []),
-        metadata=payload.get("metadata", {}),
+        metadata=meta,
     )
+    if coverage_point:
+        mark_covered(coverage_point, trace_id)
 
 
 # --- Agents ------------------------------------------------------------------
@@ -256,6 +272,7 @@ def orchestrator(state: AgentState) -> Dict[str, Any]:
             ],
             "metadata": {"stage": "orchestrator_dispatch", "mode": "demo" if DEMO_MODE else "real", "reasoning": reasoning},
         },
+        coverage_point="orchestrator_dispatch",
     )
     return {
         "messages": [f"orchestrator: dispatching research + code tasks ({'demo' if DEMO_MODE else 'real'})"],
@@ -292,6 +309,7 @@ def research(state: AgentState) -> Dict[str, Any]:
             ],
             "metadata": {"stage": "research_execute", "mode": "demo" if DEMO_MODE else "real", "reasoning": reasoning},
         },
+        coverage_point="research_tool_select",
     )
     if DEMO_MODE:
         tok = _mock_llm((0.4, 0.8), (200, 400))
@@ -339,6 +357,7 @@ def coder(state: AgentState) -> Dict[str, Any]:
             ],
             "metadata": {"stage": "coder_execute", "mode": "demo" if DEMO_MODE else "real", "reasoning": reasoning},
         },
+        coverage_point="coder_tool_select",
     )
     if DEMO_MODE:
         tok = _mock_llm((0.3, 0.6), (300, 600))
@@ -349,6 +368,27 @@ def coder(state: AgentState) -> Dict[str, Any]:
         )
         tok = {"_input_tokens": res["_input_tokens"], "_output_tokens": res["_output_tokens"]}
     if DEMO_MODE and random.random() < DEMO_FAILURE_RATE:
+        _maybe_emit_decision(
+            state,
+            {
+                "actor_agent_id": "coder_agent",
+                "decision_type": "route_branch",
+                "selected_candidate_id": "error_halt",
+                "confidence": 1.0,
+                "rationale_summary": "Reject: hallucinated import detected; halting execution.",
+                "evidence_refs": ["error=hallucinated_import"],
+                "candidates": [
+                    {
+                        "candidate_id": "error_halt",
+                        "candidate_type": "branch",
+                        "score": 1.0,
+                        "reason": "unrecoverable hallucination",
+                    }
+                ],
+                "metadata": {"stage": "coder_error", "mode": "demo" if DEMO_MODE else "real"},
+            },
+            coverage_point="coder_error_halt",
+        )
         raise RuntimeError("Hallucinated import: `from anthropic import GalaxyBrain`")
     return {
         "code": "def solve():\n    return 42" if DEMO_MODE else res["content"],
@@ -386,6 +426,7 @@ def reviewer(state: AgentState) -> Dict[str, Any]:
                 "reasoning": reasoning,
             },
         },
+        coverage_point="reviewer_route",
     )
     if DEMO_MODE:
         tok = _mock_llm((0.15, 0.3), (100, 200))

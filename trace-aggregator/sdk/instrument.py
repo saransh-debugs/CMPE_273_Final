@@ -22,154 +22,24 @@ to the returned state dict.
 from __future__ import annotations
 
 import functools
-import json
-import os
-import time
-import traceback
-import uuid
-from typing import Any, Callable, Dict, Iterable, Optional
-
-from pydantic import BaseModel, Field, ValidationError
-from generated import tracing_pb2
+from typing import Any, Callable, Dict, Optional
 
 from .client import emit_decision as _emit_decision
 from .client import emit_span
-
-# Reserved keys we inject into the LangGraph state.
-TRACE_ID_KEY = "_trace_id"
-VECTOR_CLOCK_KEY = "_vector_clock"
-PARENT_SPAN_KEY = "_parent_span_id"
-INPUT_TEXT_KEY = "_input_text"
-
-METADATA_CHAR_LIMIT = 4_000  # truncate big prompts so spans stay small
-ALLOWED_DECISION_TYPES = {"agent_handoff", "tool_select", "route_branch"}
-DEFAULT_REDACT_KEYS = {
-    "password",
-    "api_key",
-    "token",
-    "secret",
-    "authorization",
-    "cookie",
-}
-REDACT_KEYS = {
-    k.strip().lower()
-    for k in os.environ.get("TRACE_REDACT_KEYS", "").split(",")
-    if k.strip()
-} | DEFAULT_REDACT_KEYS
-
-
-class DecisionCandidateModel(BaseModel):
-    candidate_id: str = Field(default="")
-    candidate_type: str = Field(default="")
-    score: float = Field(default=0.0)
-    reason: str = Field(default="")
-
-
-class DecisionPayloadModel(BaseModel):
-    trace_id: str
-    decision_id: str
-    source_span_id: str
-    actor_agent_id: str
-    decision_type: str
-    selected_candidate_id: str
-    confidence: float = Field(ge=0.0, le=1.0)
-    rationale_summary: str = Field(max_length=512)
-    evidence_refs: list[str] = Field(default_factory=list)
-    candidates: list[DecisionCandidateModel] = Field(default_factory=list)
-    timestamp_ms: int
-    metadata: str = Field(default="")
-
-
-def new_trace_context(input_text: str = "") -> Dict[str, Any]:
-    """Build the initial tracing fields to merge into your initial state."""
-    ctx: Dict[str, Any] = {
-        TRACE_ID_KEY: str(uuid.uuid4()),
-        VECTOR_CLOCK_KEY: {},
-        PARENT_SPAN_KEY: "",
-    }
-    if input_text:
-        ctx[INPUT_TEXT_KEY] = input_text
-    return ctx
-
-
-def _truncate(text: str, limit: int = METADATA_CHAR_LIMIT) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + f"...[truncated {len(text) - limit} chars]"
-
-
-def _extract_token_counts(result: Any) -> tuple[int, int]:
-    """
-    Best-effort token extraction. LangChain/LangGraph responses vary widely.
-    Falls back to (0, 0) and lets the engine note "unknown".
-    Teams can override this by setting `_input_tokens` / `_output_tokens`
-    in the returned state dict directly.
-    """
-    if isinstance(result, dict):
-        if "_input_tokens" in result or "_output_tokens" in result:
-            return int(result.get("_input_tokens", 0)), int(result.get("_output_tokens", 0))
-    return 0, 0
-
-
-def _normalize_candidates(candidates: Iterable[Dict[str, Any]]) -> list[tracing_pb2.DecisionCandidate]:
-    normalized: list[tracing_pb2.DecisionCandidate] = []
-    for cand in candidates:
-        if not cand:
-            continue
-        normalized.append(
-            tracing_pb2.DecisionCandidate(
-                candidate_id=str(cand.get("candidate_id", "")),
-                candidate_type=str(cand.get("candidate_type", "")),
-                score=float(cand.get("score", 0.0) or 0.0),
-                reason=_truncate(str(cand.get("reason", ""))),
-            )
-        )
-    return normalized
-
-
-def _redact_sensitive(value: Any) -> Any:
-    if isinstance(value, dict):
-        redacted = {}
-        for k, v in value.items():
-            if str(k).lower() in REDACT_KEYS:
-                redacted[k] = "[REDACTED]"
-            else:
-                redacted[k] = _redact_sensitive(v)
-        return redacted
-    if isinstance(value, list):
-        return [_redact_sensitive(v) for v in value]
-    return value
-
-
-def validate_decision_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate decision payload contract and return normalized dict."""
-    parsed = DecisionPayloadModel(**payload)
-    return parsed.model_dump()
-
-
-def build_decision_fallback(
-    *,
-    trace_id: str,
-    source_span_id: str,
-    actor_agent_id: str,
-    decision_type: str,
-    selected_candidate_id: str = "fallback",
-    reason: str = "decision_payload_validation_failed",
-) -> Dict[str, Any]:
-    return {
-        "trace_id": trace_id,
-        "decision_id": str(uuid.uuid4()),
-        "source_span_id": source_span_id,
-        "actor_agent_id": actor_agent_id,
-        "decision_type": decision_type,
-        "selected_candidate_id": selected_candidate_id,
-        "confidence": 0.0,
-        "rationale_summary": "Fallback decision emitted due to invalid decision payload.",
-        "evidence_refs": [reason],
-        "candidates": [],
-        "timestamp_ms": int(time.time() * 1000),
-        "metadata": json.dumps({"fallback_used": True, "parse_error_reason": reason}),
-    }
+from .core import (
+    ALLOWED_DECISION_TYPES,
+    PARENT_SPAN_KEY,
+    TRACE_ID_KEY,
+    VECTOR_CLOCK_KEY,
+    begin_span,
+    build_decision_fallback,
+    build_span,
+    emit_decision_event,
+    new_trace_context,
+    normalize_node_result,
+    validate_decision_payload,
+    mark_covered,
+)
 
 
 def emit_decision(
@@ -185,68 +55,19 @@ def emit_decision(
     candidates: Optional[list[Dict[str, Any]]] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """
-    Emit a first-class decision event.
-    Returns the generated decision_id to support local correlation/debugging.
-    """
-    if decision_type not in ALLOWED_DECISION_TYPES:
-        raise ValueError(
-            f"decision_type must be one of {sorted(ALLOWED_DECISION_TYPES)}, got {decision_type}"
-        )
-    decision_id = str(uuid.uuid4())
-    raw_payload = {
-        "trace_id": str(trace_id),
-        "decision_id": decision_id,
-        "source_span_id": str(source_span_id),
-        "actor_agent_id": str(actor_agent_id),
-        "decision_type": decision_type,
-        "selected_candidate_id": str(selected_candidate_id),
-        "confidence": float(confidence),
-        "rationale_summary": _truncate(str(rationale_summary), 512),
-        "evidence_refs": [str(e) for e in (evidence_refs or [])],
-        "candidates": [
-            {
-                "candidate_id": str(c.get("candidate_id", "")),
-                "candidate_type": str(c.get("candidate_type", "")),
-                "score": float(c.get("score", 0.0) or 0.0),
-                "reason": _truncate(str(c.get("reason", ""))),
-            }
-            for c in (candidates or [])
-            if isinstance(c, dict)
-        ],
-        "timestamp_ms": int(time.time() * 1000),
-        "metadata": _truncate(
-            json.dumps(_redact_sensitive(metadata or {}), default=str),
-        ),
-    }
-    try:
-        normalized = validate_decision_payload(raw_payload)
-    except ValidationError as e:
-        normalized = build_decision_fallback(
-            trace_id=str(trace_id),
-            source_span_id=str(source_span_id),
-            actor_agent_id=str(actor_agent_id),
-            decision_type=decision_type,
-            reason=str(e.errors()[0].get("msg", "validation_error")),
-        )
-        decision_id = normalized["decision_id"]
-
-    payload = tracing_pb2.DecisionEvent(
-        trace_id=normalized["trace_id"],
-        decision_id=normalized["decision_id"],
-        source_span_id=normalized["source_span_id"],
-        actor_agent_id=normalized["actor_agent_id"],
-        decision_type=normalized["decision_type"],
-        selected_candidate_id=normalized["selected_candidate_id"],
-        confidence=float(normalized["confidence"]),
-        rationale_summary=str(normalized["rationale_summary"]),
-        evidence_refs=[str(e) for e in normalized["evidence_refs"]],
-        candidates=_normalize_candidates(normalized["candidates"]),
-        timestamp_ms=int(normalized["timestamp_ms"]),
-        metadata=str(normalized["metadata"]),
+    return emit_decision_event(
+        trace_id=trace_id,
+        source_span_id=source_span_id,
+        actor_agent_id=actor_agent_id,
+        decision_type=decision_type,
+        selected_candidate_id=selected_candidate_id,
+        confidence=confidence,
+        rationale_summary=rationale_summary,
+        evidence_refs=evidence_refs,
+        candidates=candidates,
+        metadata=metadata,
+        emit_fn=_emit_decision,
     )
-    _emit_decision(payload)
-    return decision_id
 
 
 def instrument_decision(
@@ -288,6 +109,46 @@ def instrument_decision(
     return decorator
 
 
+def decide_then_act(
+    decision_fn: Callable[[Dict[str, Any]], Dict[str, Any]],
+    action_fn: Callable[[Dict[str, Any]], Any],
+    *,
+    actor_agent_id: str,
+    decision_type: str,
+    coverage_point: str = "",
+) -> Callable[[Dict[str, Any]], Any]:
+    """
+    LLM-02: enforce that a decision is emitted BEFORE the action executes.
+    decision_fn must return a dict with keys consumed by emit_decision.
+    If decision_fn raises, action_fn never runs.
+    """
+    def wrapped(state: Dict[str, Any]) -> Any:
+        payload = decision_fn(state)
+        trace_id = str(state.get(TRACE_ID_KEY, ""))
+        source_span_id = str(state.get(PARENT_SPAN_KEY, ""))
+        if trace_id and source_span_id:
+            meta = dict(payload.get("metadata") or {})
+            if coverage_point:
+                meta["coverage_point"] = coverage_point
+            emit_decision(
+                trace_id=trace_id,
+                source_span_id=source_span_id,
+                actor_agent_id=actor_agent_id,
+                decision_type=decision_type,
+                selected_candidate_id=str(payload.get("selected_candidate_id", "")),
+                confidence=float(payload.get("confidence", 0.0) or 0.0),
+                rationale_summary=str(payload.get("rationale_summary", "")),
+                evidence_refs=[str(x) for x in payload.get("evidence_refs", [])],
+                candidates=payload.get("candidates", []),
+                metadata=meta,
+            )
+            if coverage_point:
+                mark_covered(coverage_point, trace_id)
+        return action_fn(state)
+
+    return wrapped
+
+
 def instrument_node(
     agent_name: str,
     *,
@@ -309,81 +170,39 @@ def instrument_node(
     def decorator(node_func: Callable) -> Callable:
         @functools.wraps(node_func)
         def wrapped(state: Dict[str, Any], *args, **kwargs):
-            trace_id = state.get(TRACE_ID_KEY)
-            if not trace_id:
-                # Auto-init if the team forgot to call new_trace_context.
-                trace_id = str(uuid.uuid4())
-
-            clock: Dict[str, int] = dict(state.get(VECTOR_CLOCK_KEY) or {})
-            clock[agent_name] = clock.get(agent_name, 0) + 1
-
-            parent_span_id = state.get(PARENT_SPAN_KEY) or ""
-            span_id = str(uuid.uuid4())
-
-            start_wall_ms = int(time.time() * 1000)
-            t0 = time.perf_counter()
-
-            # Expose current span_id to in-node decision emitters BEFORE
-            # calling the function. The span proto already captured the
-            # incoming parent_span_id above, so this is safe.
-            state[PARENT_SPAN_KEY] = span_id
+            span_ctx = begin_span(
+                agent_name=agent_name,
+                trace_id=state.get(TRACE_ID_KEY),
+                vector_clock=state.get(VECTOR_CLOCK_KEY),
+                parent_span_id=state.get(PARENT_SPAN_KEY),
+            )
+            state[PARENT_SPAN_KEY] = span_ctx.span_id
 
             error: Optional[BaseException] = None
             result: Any = None
             try:
                 result = node_func(state, *args, **kwargs)
-            except BaseException as e:  # noqa: BLE001  — we re-raise after emitting
+            except BaseException as e:  # noqa: BLE001
                 error = e
-
-            latency_ms = int((time.perf_counter() - t0) * 1000)
-
-            in_tok, out_tok = _extract_token_counts(result)
-
-            # Build the metadata payload
-            meta: Dict[str, Any] = {}
-            if capture_metadata:
-                user_state = {
-                    k: v for k, v in state.items()
-                    if not k.startswith("_")
-                }
-                meta["input_state_keys"] = list(user_state.keys())
-                if isinstance(result, dict):
-                    meta["output_state_keys"] = [k for k in result.keys() if not k.startswith("_")]
-            input_text = state.get(INPUT_TEXT_KEY)
-            if input_text:
-                meta["input_text"] = _truncate(str(input_text), 1000)
-            if error is not None:
-                meta["error_type"] = type(error).__name__
-                meta["error_message"] = str(error)
-                meta["traceback"] = _truncate(traceback.format_exc())
-
-            span = tracing_pb2.AgentSpan(
-                trace_id=trace_id,
-                span_id=span_id,
-                parent_span_id=parent_span_id,
-                agent_id=agent_name,
-                vector_clock={k: int(v) for k, v in clock.items()},
-                event_type="error" if error else event_type,
-                input_tokens=in_tok,
-                output_tokens=out_tok,
-                latency_ms=latency_ms,
-                start_time_ms=start_wall_ms,
-                metadata=_truncate(json.dumps(meta, default=str)),
+            span = build_span(
+                ctx=span_ctx,
+                agent_name=agent_name,
+                event_type=event_type,
+                state=state,
+                result=result,
+                error=error,
+                capture_metadata=capture_metadata,
             )
             emit_span(span)
 
             if error is not None:
-                raise error  # preserve user-visible behavior
+                raise error
 
-            # Merge tracing fields back into state for the next node.
-            if not isinstance(result, dict):
-                # Some LangGraph nodes return None/list. Pass tracing through state by attaching.
-                result = {} if result is None else {"_node_return": result}
-
-            result[TRACE_ID_KEY] = trace_id
-            result[VECTOR_CLOCK_KEY] = clock
-            result[PARENT_SPAN_KEY] = span_id
-            return result
+            out = normalize_node_result(result)
+            out[TRACE_ID_KEY] = span_ctx.trace_id
+            out[VECTOR_CLOCK_KEY] = span_ctx.vector_clock
+            out[PARENT_SPAN_KEY] = span_ctx.span_id
+            return out
 
         return wrapped
 
