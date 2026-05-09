@@ -16,75 +16,75 @@ Each task includes scope, dependencies, deliverables, and acceptance criteria.
 
 ## LLM-Specific Work
 
-### LLM-01: Decision Coverage Completion
+### LLM-01: Decision Coverage Completion [DONE]
 
 - **Scope:** Emit `DecisionEvent` for every non-trivial branch/handoff/tool select.
 - **Dependencies:** None.
-- **Deliverables:** Decision map + missing emits added in orchestration code.
-- **Acceptance:** For sampled traces, all major DAG branching points have linked decisions.
+- **Deliverables:** Decision map + missing emits added in orchestration code. (Completed)
+- **Acceptance:** For sampled traces, all major DAG branching points have linked decisions. (Met)
 
-### LLM-02: Decide->Act Contract Enforcement
+### LLM-02: Decide->Act Contract Enforcement [DONE]
 
 - **Scope:** Ensure decisions are logged before action execution.
 - **Dependencies:** LLM-01.
-- **Deliverables:** Reusable `decide_then_act` wrapper/decorator.
-- **Acceptance:** No covered action executes without a prior recorded decision.
+- **Deliverables:** Reusable `decide_then_act` wrapper/decorator. (Completed)
+- **Acceptance:** No covered action executes without a prior recorded decision. (Met)
 
-### LLM-03: Structured Decision JSON Reliability
+### LLM-03: Structured Decision JSON Reliability [DONE]
 
 - **Scope:** Harden model output parsing/validation and fallback behavior.
 - **Dependencies:** None.
-- **Deliverables:** Strict schema validation, fallback taxonomy, parse-failure metadata.
-- **Acceptance:** Malformed model outputs never crash flow; fallback is explicit and queryable.
+- **Deliverables:** Strict schema validation, fallback taxonomy, parse-failure metadata. (Completed)
+- **Acceptance:** Malformed model outputs never crash flow; fallback is explicit and queryable. (Met)
 
-### LLM-04: Confidence Calibration
+### LLM-04: Confidence Calibration [DONE]
 
 - **Scope:** Make decision confidence meaningful against observed outcomes.
 - **Dependencies:** LLM-03 + trace corpus.
-- **Deliverables:** Calibration report and updated confidence policy.
-- **Acceptance:** Confidence bands correlate with real success/error rates.
+- **Deliverables:** Calibration report and updated confidence policy. (Completed)
+- **Acceptance:** Confidence bands correlate with real success/error rates. (Met)
 
-### LLM-05: Rationale Quality Standards
+### LLM-05: Rationale Quality Standards [DONE]
 
 - **Scope:** Standardize concise, actionable rationale summaries.
 - **Dependencies:** None.
-- **Deliverables:** Rationale rubric + prompt updates.
-- **Acceptance:** Most sampled decisions meet rubric and aid triage.
+- **Deliverables:** Rationale rubric + prompt updates. (Completed)
+- **Acceptance:** Most sampled decisions meet rubric and aid triage. (Met)
 
-### LLM-06: LLM Metadata Redaction
+### LLM-06: LLM Metadata Redaction [DONE]
 
 - **Scope:** Prevent sensitive prompt/context leakage in metadata.
 - **Dependencies:** SDK redaction hooks.
-- **Deliverables:** Redaction policy + test cases.
-- **Acceptance:** Sensitive keys are always redacted before persistence.
+- **Deliverables:** Redaction policy + test cases. (Completed)
+- **Acceptance:** Sensitive keys are always redacted before persistence. (Met)
 
-### LLM-07: Multi-Provider Compatibility
+### LLM-07: Multi-Provider Compatibility [DONE]
 
 - **Scope:** Verify instrumentation works across multiple OpenAI-compatible providers.
 - **Dependencies:** None.
-- **Deliverables:** Provider matrix + env examples + normalization notes.
-- **Acceptance:** Same trace semantics across all tested providers.
+- **Deliverables:** Provider matrix + env examples + normalization notes. (Completed)
+- **Acceptance:** Same trace semantics across all tested providers. (Met)
 
-### LLM-08: Token/Latency Accuracy Audit
+### LLM-08: Token/Latency Accuracy Audit [DONE]
 
 - **Scope:** Verify token and latency fidelity in real mode.
 - **Dependencies:** Real mode execution.
-- **Deliverables:** Audit script + discrepancy report.
-- **Acceptance:** Metric discrepancies within agreed threshold.
+- **Deliverables:** Audit script + discrepancy report. (Completed)
+- **Acceptance:** Metric discrepancies within agreed threshold. (Met)
 
-### LLM-09: Semantic Failure Taxonomy
+### LLM-09: Semantic Failure Taxonomy [DONE]
 
 - **Scope:** Label error classes (bad delegation, wrong tool, hallucinated output, etc.).
 - **Dependencies:** Trace corpus.
-- **Deliverables:** Failure enum/taxonomy and tagging logic.
-- **Acceptance:** Error traces are filterable by semantic failure type.
+- **Deliverables:** Failure enum/taxonomy and tagging logic. (Completed)
+- **Acceptance:** Error traces are filterable by semantic failure type. (Met)
 
-### LLM-10: Decision Coverage CI Gate
+### LLM-10: Decision Coverage CI Gate [DONE]
 
 - **Scope:** Prevent regressions in decision observability coverage.
 - **Dependencies:** LLM-01.
-- **Deliverables:** CI checker for expected decision points.
-- **Acceptance:** PR fails when required decision points lose instrumentation.
+- **Deliverables:** CI checker for expected decision points. (Completed)
+- **Acceptance:** PR fails when required decision points lose instrumentation. (Met)
 
 ---
 
