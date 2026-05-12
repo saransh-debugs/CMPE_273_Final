@@ -22,6 +22,7 @@ import clickhouse_connect
 
 from .dag import Span, reconstruct_dag, serialize_dag, detect_gaps
 from .blame import compute_blame, blame_to_dicts
+from .blame_v2 import compute_blame_v2, blame_v2_to_dicts 
 
 _logger = logging.getLogger("engine.worker")
 
@@ -453,6 +454,7 @@ def reconstruct_one(client, trace_id: str) -> dict:
     dag = serialize_dag(nodes)
     gaps = detect_gaps(nodes)
     blame = compute_blame(spans)
+    blame_v2 = compute_blame_v2(spans, node_map=nodes)
     decisions = fetch_decisions(client, trace_id)
     input_text = _extract_input_text(client, trace_id)
 
@@ -470,6 +472,7 @@ def reconstruct_one(client, trace_id: str) -> dict:
         "error_count": int(error_count),
         "dag_json": json.dumps({"nodes": dag, "inferred_parents": gaps}),
         "blame_json": json.dumps(blame_to_dicts(blame)),
+        "blame_v2_json": json.dumps(blame_v2_to_dicts(blame_v2)),
         "input_text": input_text,
     }
 
@@ -493,6 +496,7 @@ def reconstruct_one(client, trace_id: str) -> dict:
             payload["error_count"],
             payload["dag_json"],
             payload["blame_json"],
+            payload["blame_v2_json"],
             payload["input_text"],
             anchor_first,
         )],
@@ -506,6 +510,7 @@ def reconstruct_one(client, trace_id: str) -> dict:
             "error_count",
             "dag_json",
             "blame_json",
+            "blame_v2_json",
             "input_text",
             "first_reconstructed_at",
         ],
