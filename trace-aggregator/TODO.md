@@ -493,6 +493,7 @@ can correlate to PagerDuty/Datadog incidents.
 - **Dependencies:** ENG-04.
 - **Deliverables:** SLO spec + periodic reporting pipeline. (Completed)
 - **Acceptance:** SLO status is visible and alert-driven. (Met)
+- **Verified:** Unit tests and `/slo` API smoke checks passed in this session.
 
 #### ENG-12 Implementation Details
 
