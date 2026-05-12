@@ -2,10 +2,13 @@ import type {
   TraceSummary,
   TraceListResponse,
   TraceDetail,
-  GlobalBlameRow,
+  GlobalBlameResponse,
   DecisionEvent,
   RootCauseEdge,
   SLOResponse,
+  Incident,
+  IncidentListResponse,
+  IncidentState,
 } from "./types";
 
 // Vite proxies /api/* to the FastAPI server in dev (see vite.config.ts).
@@ -25,10 +28,12 @@ export const api = {
   limit = 50,
   hasErrors?: boolean,
   cursor?: string,
+  agentId?: string,
   ): Promise<TraceListResponse> => {
     const params = new URLSearchParams({ limit: String(limit) });
     if (hasErrors !== undefined) params.set("has_errors", String(hasErrors));
     if (cursor) params.set("cursor", cursor);
+    if (agentId) params.set("agent_id", agentId);
     return get<TraceListResponse>(`/traces?${params}`);
   },
   getTrace: (id: string) => get<TraceDetail>(`/traces/${id}`),
@@ -36,9 +41,25 @@ export const api = {
     get<DecisionEvent[]>(`/traces/${id}/decisions`),
   getRootCause: (id: string) =>
     get<RootCauseEdge[]>(`/traces/${id}/root-cause`),
-  globalBlame: (hours = 24) =>
-    get<GlobalBlameRow[]>(`/agents/blame?hours=${hours}`),
+  globalBlame: (hours = 24, modelVersion: "v1" | "v2" = "v1") =>
+    get<GlobalBlameResponse>(`/agents/blame?hours=${hours}&model_version=${modelVersion}`),
   slo: (historyLimit = 20) => get<SLOResponse>(`/slo?history_limit=${historyLimit}`),
+  listIncidents: (state?: IncidentState) => {
+    const qs = state ? `?state=${state}` : "";
+    return get<IncidentListResponse>(`/incidents${qs}`);
+  },
+  ackIncident: (key: string): Promise<Incident> =>
+    fetch(`${BASE}/incidents/${encodeURIComponent(key)}/ack`, { method: "POST" })
+      .then((r) => {
+        if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+        return r.json();
+      }),
+  resolveIncident: (key: string): Promise<Incident> =>
+    fetch(`${BASE}/incidents/${encodeURIComponent(key)}/resolve`, { method: "POST" })
+      .then((r) => {
+        if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+        return r.json();
+      }),
 };
 
 /**

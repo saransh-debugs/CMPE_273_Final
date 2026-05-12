@@ -4,6 +4,8 @@ import { agentColor, fmtMs, shortId } from "../utils/format";
 
 interface Props {
   nodes: DAGNode[];
+  selectedSpanId?: string | null;
+  onSpanSelect?: (id: string | null) => void;
 }
 
 const ROW_HEIGHT = 28;
@@ -19,7 +21,7 @@ const AXIS_HEIGHT = 24;
  * - Bar length = latency_ms. Bar color = stable per-agent color.
  * - Error spans get a cherry-red border + slash pattern.
  */
-export function TimelineWaterfall({ nodes }: Props) {
+export function TimelineWaterfall({ nodes, selectedSpanId, onSpanSelect }: Props) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [mouse, setMouse] = useState({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
@@ -116,21 +118,23 @@ export function TimelineWaterfall({ nodes }: Props) {
           const c = agentColor(n.agent_id);
           const isError = n.event_type === "error";
           const isHovered = hovered === n.span_id;
+          const isSelected = selectedSpanId === n.span_id;
 
           return (
             <g
               key={n.span_id}
               onMouseEnter={() => setHovered(n.span_id)}
               onMouseLeave={() => setHovered(null)}
-              style={{ cursor: "default" }}
+              onClick={() => onSpanSelect?.(isSelected ? null : n.span_id)}
+              style={{ cursor: "pointer" }}
             >
-              {/* Row hover background */}
+              {/* Row hover/select background */}
               <rect
                 x={0}
                 y={y - 2}
                 width={totalWidth}
                 height={ROW_HEIGHT}
-                fill={isHovered ? "#1A1714" : "transparent"}
+                fill={isSelected ? "#2A1F1C" : isHovered ? "#1A1714" : "transparent"}
               />
               {/* Agent label */}
               <text
@@ -162,6 +166,19 @@ export function TimelineWaterfall({ nodes }: Props) {
                 strokeWidth={isError ? 1.5 : 0}
                 opacity={isHovered ? 1 : 0.85}
               />
+              {/* Selection ring */}
+              {isSelected && (
+                <rect
+                  x={x - 2}
+                  y={y - 2}
+                  width={w + 4}
+                  height={ROW_HEIGHT - 2}
+                  rx={3}
+                  fill="none"
+                  stroke="#E8E2D4"
+                  strokeWidth={1.5}
+                />
+              )}
               {/* Inline label inside the bar if it fits */}
               {w > 80 && (
                 <text

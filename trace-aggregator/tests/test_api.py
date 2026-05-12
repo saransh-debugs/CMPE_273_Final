@@ -84,7 +84,10 @@ class TestListTraces(unittest.TestCase):
             with TestClient(app) as tc:
                 resp = tc.get("/traces")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), [])
+        body = resp.json()
+        self.assertEqual(body["items"], [])
+        self.assertIsNone(body["next_cursor"])
+        self.assertFalse(body["has_more"])
 
     def test_returns_trace_fields(self):
         from api.main import app
@@ -93,7 +96,7 @@ class TestListTraces(unittest.TestCase):
         with patch("api.main._client", _make_client_factory(rows)):
             with TestClient(app) as tc:
                 resp = tc.get("/traces")
-        data = resp.json()
+        data = resp.json()["items"]
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["trace_id"], "trace-abc")
         self.assertEqual(data[0]["span_count"], 5)
@@ -106,7 +109,7 @@ class TestListTraces(unittest.TestCase):
         with patch("api.main._client", _make_client_factory(rows)):
             with TestClient(app) as tc:
                 resp = tc.get("/traces")
-        self.assertTrue(resp.json()[0]["reconstructed_at"].endswith("Z"))
+        self.assertTrue(resp.json()["items"][0]["reconstructed_at"].endswith("Z"))
 
     def test_limit_param_accepted(self):
         from api.main import app
@@ -129,10 +132,11 @@ class TestGetTrace(unittest.TestCase):
     def _trace_row(self, trace_id="trace-1"):
         return (
             trace_id, 3, 500, 100, 200, 0,
-            json.dumps([]),
-            json.dumps([]),
+            json.dumps([]),   # dag_json
+            json.dumps([]),   # blame_json
             datetime(2026, 1, 1, tzinfo=timezone.utc),
             "sample input",
+            json.dumps([]),   # blame_v2_json (index 10 — added in ENG-06)
         )
 
     def test_returns_trace_with_dag_and_blame(self):
@@ -234,48 +238,137 @@ class TestGetTraceDecisions(unittest.TestCase):
 
 
 class TestAggregateBlame(unittest.TestCase):
-    def _span_row(self, agent_id, latency, in_tok, out_tok, event_type, ikey):
-        return (agent_id, latency, in_tok, out_tok, event_type, ikey,
-                datetime(2026, 1, 1, tzinfo=timezone.utc))
+    def _blame_row(self, entries: list) -> tuple:
+        """Return a single-column row as the endpoint reads: (blame_json_string,)."""
+        return (json.dumps(entries),)
 
     def test_aggregates_by_agent(self):
         from api.main import app
         from fastapi.testclient import TestClient
+        # Two traces; agent-a appears in both, agent-b in the second only.
         rows = [
-            self._span_row("agent-a", 100, 10, 20, "llm_call", "k1"),
-            self._span_row("agent-a", 200, 5, 10, "llm_call", "k2"),
-            self._span_row("agent-b", 50, 2, 4, "error", "k3"),
+            self._blame_row([
+                {"agent_id": "agent-a", "blame_score": 60.0, "total_latency_ms": 100,
+                 "total_input_tokens": 10, "total_output_tokens": 20, "error_count": 0},
+            ]),
+            self._blame_row([
+                {"agent_id": "agent-a", "blame_score": 40.0, "total_latency_ms": 200,
+                 "total_input_tokens": 5, "total_output_tokens": 10, "error_count": 0},
+                {"agent_id": "agent-b", "blame_score": 80.0, "total_latency_ms": 50,
+                 "total_input_tokens": 2, "total_output_tokens": 4, "error_count": 1},
+            ]),
         ]
         with patch("api.main._client", _make_client_factory(rows)):
             with TestClient(app) as tc:
                 resp = tc.get("/agents/blame")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
-        by_agent = {r["agent_id"]: r for r in data}
-        self.assertEqual(by_agent["agent-a"]["spans"], 2)
+        agents = data["agents"]
+        by_agent = {r["agent_id"]: r for r in agents}
+        self.assertEqual(by_agent["agent-a"]["trace_count"], 2)
         self.assertEqual(by_agent["agent-a"]["total_latency_ms"], 300)
         self.assertEqual(by_agent["agent-b"]["error_count"], 1)
 
-    def test_deduplication_by_idempotency_key(self):
+    def test_same_agent_across_traces_summed(self):
         from api.main import app
         from fastapi.testclient import TestClient
+        # Same agent in two separate trace blame_json rows → counts should sum.
         rows = [
-            self._span_row("agent-a", 100, 10, 20, "llm_call", "same-key"),
-            self._span_row("agent-a", 100, 10, 20, "llm_call", "same-key"),
+            self._blame_row([
+                {"agent_id": "agent-a", "blame_score": 50.0, "total_latency_ms": 100,
+                 "total_input_tokens": 10, "total_output_tokens": 20, "error_count": 0},
+            ]),
+            self._blame_row([
+                {"agent_id": "agent-a", "blame_score": 50.0, "total_latency_ms": 100,
+                 "total_input_tokens": 10, "total_output_tokens": 20, "error_count": 0},
+            ]),
         ]
         with patch("api.main._client", _make_client_factory(rows)):
             with TestClient(app) as tc:
                 resp = tc.get("/agents/blame")
-        data = resp.json()
-        self.assertEqual(data[0]["spans"], 1)
+        agents = resp.json()["agents"]
+        self.assertEqual(len(agents), 1)
+        self.assertEqual(agents[0]["trace_count"], 2)
+        self.assertEqual(agents[0]["total_latency_ms"], 200)
 
-    def test_empty_spans_returns_empty(self):
+    def test_empty_returns_empty_agents(self):
         from api.main import app
         from fastapi.testclient import TestClient
         with patch("api.main._client", _make_client_factory([])):
             with TestClient(app) as tc:
                 resp = tc.get("/agents/blame")
-        self.assertEqual(resp.json(), [])
+        body = resp.json()
+        self.assertEqual(body["agents"], [])
+        self.assertEqual(body["model_version"], "v1")
+
+
+class TestIncidents(unittest.TestCase):
+    def _incident_row(self, key="error_burst:agent:foo", state="open", count=1):
+        return (
+            key, "error_burst", state, "medium", "Test message", '{"agent_id": "foo"}',
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            datetime(1970, 1, 1, tzinfo=timezone.utc),
+            datetime(1970, 1, 1, tzinfo=timezone.utc),
+            count,
+        )
+
+    def test_list_incidents_empty(self):
+        from api.main import app
+        from fastapi.testclient import TestClient
+        # list_incidents queries twice: list_incidents() + state_counts()
+        with patch("api.main._client", _make_client_factory([], [])):
+            with TestClient(app) as tc:
+                resp = tc.get("/incidents")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["items"], [])
+        self.assertEqual(body["counts"], {"open": 0, "ack": 0, "resolved": 0})
+
+    def test_list_incidents_returns_items(self):
+        from api.main import app
+        from fastapi.testclient import TestClient
+        rows = [self._incident_row("k1", "open", 3)]
+        counts = [("open", 1), ("resolved", 5)]
+        with patch("api.main._client", _make_client_factory(rows, counts)):
+            with TestClient(app) as tc:
+                resp = tc.get("/incidents?state=open")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(len(body["items"]), 1)
+        self.assertEqual(body["items"][0]["state"], "open")
+        self.assertEqual(body["items"][0]["occurrence_count"], 3)
+        self.assertEqual(body["counts"]["open"], 1)
+        self.assertEqual(body["counts"]["resolved"], 5)
+
+    def test_ack_unknown_returns_404(self):
+        from api.main import app
+        from fastapi.testclient import TestClient
+        with patch("api.main._client", _make_client_factory([])):  # _fetch_latest returns []
+            with TestClient(app, raise_server_exceptions=False) as tc:
+                resp = tc.post("/incidents/missing/ack")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_ack_existing_transitions_state(self):
+        from api.main import app
+        from fastapi.testclient import TestClient
+        # acknowledge() does 1 SELECT then 1 INSERT
+        with patch("api.main._client", _make_client_factory([self._incident_row("k1", "open")])):
+            with TestClient(app) as tc:
+                resp = tc.post("/incidents/k1/ack")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["state"], "ack")
+
+    def test_resolve_existing(self):
+        from api.main import app
+        from fastapi.testclient import TestClient
+        with patch("api.main._client", _make_client_factory([self._incident_row("k1", "open")])):
+            with TestClient(app) as tc:
+                resp = tc.post("/incidents/k1/resolve")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["state"], "resolved")
+        self.assertEqual(body["details"]["resolved_reason"], "manual")
 
 
 def main():
@@ -285,6 +378,7 @@ def main():
     for cls in [
         TestIsoUtc, TestHealthEndpoint, TestListTraces,
         TestGetTrace, TestGetRawSpans, TestGetTraceDecisions, TestAggregateBlame,
+        TestIncidents,
     ]:
         suite.addTests(loader.loadTestsFromTestCase(cls))
     runner = unittest.TextTestRunner(verbosity=2)

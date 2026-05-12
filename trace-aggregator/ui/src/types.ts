@@ -66,11 +66,24 @@ export interface RawSpan {
 
 export interface GlobalBlameRow {
   agent_id: string;
-  spans: number;
+  trace_count: number;
+  avg_blame_score: number;
   total_latency_ms: number;
   total_input_tokens: number;
   total_output_tokens: number;
   error_count: number;
+  // V2-only fields (present when model_version=v2)
+  avg_blame_score_ci_low?: number;
+  avg_blame_score_ci_high?: number;
+  avg_blame_score_std?: number;
+  avg_error_amplification?: number;
+  model_version?: string;
+}
+
+export interface GlobalBlameResponse {
+  hours: number;
+  model_version: "v1" | "v2";
+  agents: GlobalBlameRow[];
 }
 
 export interface DecisionCandidate {
@@ -149,3 +162,24 @@ export type TraceListResponse = {
   has_more: boolean;
   limit: number;
 };
+
+export type IncidentState = "open" | "ack" | "resolved";
+
+export interface Incident {
+  incident_key: string;
+  alert_type: string;
+  state: IncidentState;
+  severity: "high" | "medium" | "low";
+  message: string;
+  details: Record<string, unknown>;
+  opened_at: string;
+  last_seen_at: string;
+  acknowledged_at: string | null;
+  resolved_at: string | null;
+  occurrence_count: number;
+}
+
+export interface IncidentListResponse {
+  items: Incident[];
+  counts: { open: number; ack: number; resolved: number };
+}

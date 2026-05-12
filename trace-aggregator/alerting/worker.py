@@ -21,6 +21,8 @@ from typing import Dict, List
 
 import clickhouse_connect
 
+from . import incidents
+
 _logger = logging.getLogger("alerting.worker")
 
 POLL_INTERVAL_SEC = float(os.environ.get("ALERT_POLL_INTERVAL_SEC", "15"))
@@ -33,6 +35,8 @@ WEBHOOK_URL = os.environ.get("ALERT_WEBHOOK_URL", "").strip()
 # Persistent-breach alerting: at least N of the last M evals must fail before we page.
 SLO_BREACH_LOOKBACK = int(os.environ.get("ALERT_SLO_LOOKBACK", "5"))
 SLO_BREACH_THRESHOLD = int(os.environ.get("ALERT_SLO_BREACH_THRESHOLD", "3"))
+# Auto-resolve incidents whose underlying condition stops firing for this long.
+AUTO_RESOLVE_SEC = int(os.environ.get("ALERT_AUTO_RESOLVE_SEC", "600"))
 
 
 @dataclass
@@ -263,8 +267,10 @@ def _rule_slo_breach(client) -> List[Alert]:
 def run_loop() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s | %(message)s")
     client = _connect()
-    last_sent: Dict[str, float] = {}
-    _logger.info("Alerting worker started. poll=%.1fs cooldown=%ss", POLL_INTERVAL_SEC, COOLDOWN_SEC)
+    _logger.info(
+        "Alerting worker started. poll=%.1fs auto_resolve=%ss",
+        POLL_INTERVAL_SEC, AUTO_RESOLVE_SEC,
+    )
     while True:
         try:
             alerts = []
@@ -274,19 +280,26 @@ def run_loop() -> None:
             alerts.extend(_rule_slo_breach(client))
             now = time.time()
             for a in alerts:
-                dedupe_key = f"{a.alert_type}:{a.key}"
-                if now - last_sent.get(dedupe_key, 0.0) < COOLDOWN_SEC:
+                status = incidents.record_alert(client, a)
+                if status not in ("new", "reopened"):
                     continue
                 payload = {
                     "type": a.alert_type,
                     "severity": a.severity,
                     "message": a.message,
                     "details": a.details,
+                    "incident_key": f"{a.alert_type}:{a.key}",
+                    "status": status,
                     "timestamp_ms": int(now * 1000),
                 }
-                _logger.warning("ALERT %s | %s | %s", a.severity.upper(), a.alert_type, a.message)
+                _logger.warning(
+                    "ALERT [%s] %s | %s | %s",
+                    status, a.severity.upper(), a.alert_type, a.message,
+                )
                 _send_webhook(payload)
-                last_sent[dedupe_key] = now
+
+            # Sweep stale incidents whose conditions cleared.
+            incidents.auto_resolve_stale(client, AUTO_RESOLVE_SEC)
         except Exception as e:  # noqa: BLE001
             _logger.exception("Alerting loop error: %s", e)
             try:

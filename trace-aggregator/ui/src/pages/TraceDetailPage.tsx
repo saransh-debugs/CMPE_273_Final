@@ -15,6 +15,7 @@ export function TraceDetailPage() {
   const [data, setData] = useState<TraceDetail | null>(null);
   const [rootCause, setRootCause] = useState<RootCauseEdge[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
 
   useEffect(() => {
     setData(null);
@@ -113,9 +114,13 @@ export function TraceDetailPage() {
           <Panel
             eyebrow="waterfall"
             title="Timeline"
-            subtitle="Spans ordered by start time. Hover for detail."
+            subtitle="Spans ordered by start time. Click to select, hover for detail."
           >
-            <TimelineWaterfall nodes={data.dag.nodes} />
+            <TimelineWaterfall
+              nodes={data.dag.nodes}
+              selectedSpanId={selectedSpanId}
+              onSpanSelect={setSelectedSpanId}
+            />
           </Panel>
 
           {/* DAG panel */}
@@ -130,7 +135,11 @@ export function TraceDetailPage() {
                 : "Reconstructed from explicit parent links."
             }
           >
-            <DAGView nodes={data.dag.nodes} />
+            <DAGView
+              nodes={data.dag.nodes}
+              selectedSpanId={selectedSpanId}
+              onSpanSelect={setSelectedSpanId}
+            />
           </Panel>
 
           {/* Decision chain panel */}
@@ -142,6 +151,8 @@ export function TraceDetailPage() {
             <DecisionPanel
               decisions={data.decisions ?? []}
               rootCause={rootCause}
+              selectedSpanId={selectedSpanId}
+              onSpanSelect={setSelectedSpanId}
             />
           </Panel>
         </div>

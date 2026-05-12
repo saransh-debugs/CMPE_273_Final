@@ -5,9 +5,11 @@ import { agentColor, fmtMs, fmtTokens, shortId } from "../utils/format";
 interface Props {
   decisions: DecisionEvent[];
   rootCause: RootCauseEdge[];
+  selectedSpanId?: string | null;
+  onSpanSelect?: (id: string | null) => void;
 }
 
-export function DecisionPanel({ decisions, rootCause }: Props) {
+export function DecisionPanel({ decisions, rootCause, selectedSpanId, onSpanSelect }: Props) {
   const [tab, setTab] = useState<"decisions" | "root-cause">("decisions");
 
   if (decisions.length === 0 && rootCause.length === 0) {
@@ -43,7 +45,12 @@ export function DecisionPanel({ decisions, rootCause }: Props) {
       {tab === "decisions" && (
         <div className="space-y-3">
           {decisions.map((d) => (
-            <DecisionCard key={d.decision_id} d={d} />
+            <DecisionCard
+              key={d.decision_id}
+              d={d}
+              selectedSpanId={selectedSpanId}
+              onSpanSelect={onSpanSelect}
+            />
           ))}
         </div>
       )}
@@ -55,7 +62,15 @@ export function DecisionPanel({ decisions, rootCause }: Props) {
               No impact edges computed yet.
             </div>
           ) : (
-            rootCause.map((e, i) => <RootCauseCard key={i} edge={e} rank={i + 1} />)
+            rootCause.map((e, i) => (
+              <RootCauseCard
+                key={i}
+                edge={e}
+                rank={i + 1}
+                selectedSpanId={selectedSpanId}
+                onSpanSelect={onSpanSelect}
+              />
+            ))
           )}
         </div>
       )}
@@ -63,13 +78,22 @@ export function DecisionPanel({ decisions, rootCause }: Props) {
   );
 }
 
-function DecisionCard({ d }: { d: DecisionEvent }) {
+function DecisionCard({
+  d,
+  selectedSpanId,
+  onSpanSelect,
+}: {
+  d: DecisionEvent;
+  selectedSpanId?: string | null;
+  onSpanSelect?: (id: string | null) => void;
+}) {
   const [open, setOpen] = useState(false);
   const c = agentColor(d.actor_agent_id);
   const confidencePct = Math.round(d.confidence * 100);
+  const isSpanSelected = selectedSpanId === d.source_span_id;
 
   return (
-    <div className="hairline rounded-sm bg-ink-700/40 overflow-hidden">
+    <div className={`hairline rounded-sm bg-ink-700/40 overflow-hidden ${isSpanSelected ? "border-cherry/60 ring-1 ring-cherry/30" : ""}`}>
       {/* Header row */}
       <button
         type="button"
@@ -197,8 +221,14 @@ function DecisionCard({ d }: { d: DecisionEvent }) {
           )}
 
           {/* Footer meta */}
-          <div className="flex gap-6 font-mono text-[10px] text-cream-500 pt-1 border-t border-ink-500/30">
-            <span>span {shortId(d.source_span_id)}</span>
+          <div className="flex gap-6 font-mono text-[10px] text-cream-500 pt-1 border-t border-ink-500/30 items-center">
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onSpanSelect?.(isSpanSelected ? null : d.source_span_id); }}
+              className={`hover:text-cream-100 transition-colors ${isSpanSelected ? "text-cherry-light" : ""}`}
+            >
+              ↗ span {shortId(d.source_span_id)}
+            </button>
             <span>decision {shortId(d.decision_id)}</span>
             <span>confidence {confidencePct}%</span>
           </div>
@@ -208,12 +238,23 @@ function DecisionCard({ d }: { d: DecisionEvent }) {
   );
 }
 
-function RootCauseCard({ edge, rank }: { edge: RootCauseEdge; rank: number }) {
+function RootCauseCard({
+  edge,
+  rank,
+  selectedSpanId,
+  onSpanSelect,
+}: {
+  edge: RootCauseEdge;
+  rank: number;
+  selectedSpanId?: string | null;
+  onSpanSelect?: (id: string | null) => void;
+}) {
   const c = agentColor(edge.actor_agent_id);
   const hasErrors = edge.impact_error_count > 0;
+  const isSpanSelected = selectedSpanId === edge.source_span_id;
 
   return (
-    <div className="hairline rounded-sm bg-ink-700/40 p-4">
+    <div className={`hairline rounded-sm bg-ink-700/40 p-4 ${isSpanSelected ? "border-cherry/60 ring-1 ring-cherry/30" : ""}`}>
       <div className="flex items-start justify-between gap-4 mb-3">
         <div className="flex items-center gap-3">
           <span className="font-mono text-[10px] text-cream-500 tabular-nums w-5">
@@ -266,8 +307,14 @@ function RootCauseCard({ edge, rank }: { edge: RootCauseEdge; rank: number }) {
         />
       </div>
 
-      <div className="mt-3 flex gap-6 font-mono text-[10px] text-cream-500 border-t border-ink-500/30 pt-2">
-        <span>src {shortId(edge.source_span_id)}</span>
+      <div className="mt-3 flex gap-6 font-mono text-[10px] text-cream-500 border-t border-ink-500/30 pt-2 items-center">
+        <button
+          type="button"
+          onClick={() => onSpanSelect?.(isSpanSelected ? null : edge.source_span_id)}
+          className={`hover:text-cream-100 transition-colors ${isSpanSelected ? "text-cherry-light" : ""}`}
+        >
+          ↗ src {shortId(edge.source_span_id)}
+        </button>
         <span>→ {shortId(edge.target_span_id)}</span>
         <span>decision {shortId(edge.decision_id)}</span>
       </div>

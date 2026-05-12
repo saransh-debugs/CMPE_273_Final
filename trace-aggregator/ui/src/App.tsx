@@ -4,6 +4,7 @@ import { TraceListPage } from "./pages/TraceListPage";
 import { TraceDetailPage } from "./pages/TraceDetailPage";
 import { BlamePage } from "./pages/BlamePage";
 import { SLOPage } from "./pages/SLOPage";
+import { IncidentsPage } from "./pages/IncidentsPage";
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
           <Route path="/" element={<TraceListPage />} />
           <Route path="/traces/:id" element={<TraceDetailPage />} />
           <Route path="/blame" element={<BlamePage />} />
+          <Route path="/incidents" element={<IncidentsPage />} />
           <Route path="/slo" element={<SLOPage />} />
         </Routes>
       </main>

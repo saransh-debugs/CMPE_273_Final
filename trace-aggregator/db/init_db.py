@@ -160,6 +160,25 @@ PARTITION BY toYYYYMMDD(evaluated_at)
 ORDER BY (slo_name, evaluated_at)
 """
 
+SCHEMA_INCIDENTS = """
+CREATE TABLE IF NOT EXISTS tracing.incidents (
+    incident_key     String,
+    alert_type       LowCardinality(String),
+    state            LowCardinality(String),
+    severity         LowCardinality(String),
+    message          String,
+    details          String,
+    opened_at        DateTime64(3),
+    last_seen_at     DateTime64(3),
+    acknowledged_at  DateTime64(3) DEFAULT toDateTime64(0, 3, 'UTC'),
+    resolved_at      DateTime64(3) DEFAULT toDateTime64(0, 3, 'UTC'),
+    occurrence_count UInt32,
+    updated_at       DateTime64(3) DEFAULT now64(3)
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY toYYYYMM(opened_at)
+ORDER BY incident_key
+"""
+
 SCHEMA_DECISION_REASON_CHAINS = """
 CREATE TABLE IF NOT EXISTS tracing.decision_reason_chains (
     trace_id String,
@@ -211,6 +230,9 @@ def setup() -> None:
 
     print("→ Creating slo_status table...")
     client.command(SCHEMA_SLO_STATUS)
+
+    print("→ Creating incidents table...")
+    client.command(SCHEMA_INCIDENTS)
 
     print("→ Ensuring input_text column on reconstructed_traces...")
     try:

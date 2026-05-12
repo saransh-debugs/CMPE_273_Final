@@ -3,6 +3,8 @@ import { agentColor, fmtMs, shortId } from "../utils/format";
 
 interface Props {
   nodes: DAGNode[];
+  selectedSpanId?: string | null;
+  onSpanSelect?: (id: string | null) => void;
 }
 
 /**
@@ -10,7 +12,7 @@ interface Props {
  * easier to read than a force-directed blob and matches the project's
  * editorial aesthetic.
  */
-export function DAGView({ nodes }: Props) {
+export function DAGView({ nodes, selectedSpanId, onSpanSelect }: Props) {
   const byId = new Map(nodes.map((n) => [n.span_id, n]));
 
   // Find roots: spans no other span lists as a child.
@@ -21,7 +23,16 @@ export function DAGView({ nodes }: Props) {
   return (
     <div className="font-mono text-[12px] leading-relaxed">
       {roots.map((r) => (
-        <TreeNode key={r.span_id} node={r} byId={byId} depth={0} isLast={true} prefix="" />
+        <TreeNode
+          key={r.span_id}
+          node={r}
+          byId={byId}
+          depth={0}
+          isLast={true}
+          prefix=""
+          selectedSpanId={selectedSpanId}
+          onSpanSelect={onSpanSelect}
+        />
       ))}
       {roots.length === 0 && (
         <div className="text-cream-500 italic font-display">No root spans found.</div>
@@ -36,15 +47,20 @@ function TreeNode({
   depth,
   isLast,
   prefix,
+  selectedSpanId,
+  onSpanSelect,
 }: {
   node: DAGNode;
   byId: Map<string, DAGNode>;
   depth: number;
   isLast: boolean;
   prefix: string;
+  selectedSpanId?: string | null;
+  onSpanSelect?: (id: string | null) => void;
 }) {
   const c = agentColor(node.agent_id);
   const isError = node.event_type === "error";
+  const isSelected = selectedSpanId === node.span_id;
 
   // Tree connector chars — pure ASCII like git log graph.
   const connector = depth === 0 ? "" : isLast ? "└─ " : "├─ ";
@@ -52,7 +68,14 @@ function TreeNode({
 
   return (
     <div>
-      <div className="group flex items-center hover:bg-ink-700/40 -mx-2 px-2 rounded-sm">
+      <div
+        className={`group flex items-center -mx-2 px-2 rounded-sm cursor-pointer ${
+          isSelected
+            ? "bg-cherry/15 border-l-2 border-cherry"
+            : "hover:bg-ink-700/40"
+        }`}
+        onClick={() => onSpanSelect?.(isSelected ? null : node.span_id)}
+      >
         <span className="text-ink-500 select-none whitespace-pre">
           {prefix + connector}
         </span>
@@ -93,6 +116,8 @@ function TreeNode({
             depth={depth + 1}
             isLast={last}
             prefix={childPrefix}
+            selectedSpanId={selectedSpanId}
+            onSpanSelect={onSpanSelect}
           />
         );
       })}

@@ -1012,3 +1012,41 @@ def aggregate_blame(
 
     out.sort(key=lambda r: r["avg_blame_score"], reverse=True)
     return {"hours": hours, "model_version": model_version, "agents": out}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# ENG-11: Incident model
+# ──────────────────────────────────────────────────────────────────────
+from alerting import incidents as _incidents
+
+
+@app.get("/incidents")
+def list_incidents(
+    state: Optional[str] = Query(None, pattern="^(open|ack|resolved)$"),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    """List incidents with optional state filter, plus aggregate counts."""
+    client = _client()
+    items = _incidents.list_incidents(client, state=state, limit=limit)
+    return {
+        "items": [i.to_dict() for i in items],
+        "counts": _incidents.state_counts(client),
+    }
+
+
+@app.post("/incidents/{incident_key:path}/ack")
+def ack_incident(incident_key: str):
+    client = _client()
+    inc = _incidents.acknowledge(client, incident_key)
+    if inc is None:
+        raise HTTPException(404, f"Incident {incident_key} not found")
+    return inc.to_dict()
+
+
+@app.post("/incidents/{incident_key:path}/resolve")
+def resolve_incident(incident_key: str):
+    client = _client()
+    inc = _incidents.resolve(client, incident_key, reason="manual")
+    if inc is None:
+        raise HTTPException(404, f"Incident {incident_key} not found")
+    return inc.to_dict()

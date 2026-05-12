@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { api, openTraceStream } from "../api";
 import type { TraceSummary } from "../types";
@@ -8,6 +8,9 @@ import { fmtDateTime, fmtMs, fmtTokens, shortId } from "../utils/format";
 type Filter = "all" | "errors" | "clean";
 
 export function TraceListPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const agentId = searchParams.get("agent_id") || undefined;
+
   const [traces, setTraces] = useState<TraceSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -19,6 +22,24 @@ export function TraceListPage() {
   const [loadingMore, setLoadingMore] = useState(false);
 
   const [live, setLive] = useState(true);   // toggle SSE vs polling
+  const [openIncidents, setOpenIncidents] = useState(0);
+
+  useEffect(() => {
+    let cancel = false;
+    const tick = () =>
+      api.listIncidents("open")
+        .then((res) => { if (!cancel) setOpenIncidents(res.items.length); })
+        .catch(() => {});
+    tick();
+    const t = setInterval(tick, 10_000);
+    return () => { cancel = true; clearInterval(t); };
+  }, []);
+
+  const clearAgentFilter = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("agent_id");
+    setSearchParams(next);
+  };
 
   useEffect(() => {
     let cancel = false;
@@ -28,7 +49,7 @@ export function TraceListPage() {
     setLoading(true);
     setError(null);
     api
-      .listTraces(50, hasErrors)
+      .listTraces(50, hasErrors, undefined, agentId)
       .then((rows) => {
         if (cancel) return;
         setTraces(rows.items);
@@ -44,25 +65,21 @@ export function TraceListPage() {
       });
 
     if (live) {
-      // ─── SSE mode ──────────────────────────────────────────────────────
-      // Open a stream and merge new traces in at the top.
       const close = openTraceStream({
         hasErrors,
+        agentId,
         onTrace: (t) => {
           setTraces((prev) => {
-            // Replace if trace_id already exists (re-reconstruction), else prepend.
             const i = prev.findIndex((x) => x.trace_id === t.trace_id);
             if (i >= 0) {
               const next = [...prev];
               next[i] = t;
               return next;
             }
-            return [t, ...prev].slice(0, 500);  // cap memory
+            return [t, ...prev].slice(0, 500);
           });
         },
-        // onHeartbeat: (ts) => setLastHeartbeat(ts),
         onError: (msg) => {
-          // Non-fatal — browser auto-reconnects. Show transient banner if you like.
           console.warn("[SSE]", msg);
         },
       });
@@ -71,10 +88,9 @@ export function TraceListPage() {
         close();
       };
     } else {
-      // ─── Polling mode (fallback) ──────────────────────────────────────
       const interval = setInterval(() => {
         api
-          .listTraces(50, hasErrors)
+          .listTraces(50, hasErrors, undefined, agentId)
           .then((rows) => { if (!cancel) setTraces(rows.items); })
           .catch(() => {});
       }, 5000);
@@ -83,7 +99,7 @@ export function TraceListPage() {
         clearInterval(interval);
       };
     }
-  }, [filter, live]);
+  }, [filter, live, agentId]);
 
     // Load More button handler — appends the next page
   const loadMore = () => {
@@ -91,7 +107,7 @@ export function TraceListPage() {
     const hasErrors = filter === "errors" ? true : filter === "clean" ? false : undefined;
     setLoadingMore(true);
     api
-      .listTraces(50, hasErrors, nextCursor)
+      .listTraces(50, hasErrors, nextCursor, agentId)
       .then((res) => {
         setTraces((prev) => [...prev, ...res.items]);
         setNextCursor(res.next_cursor);
@@ -121,6 +137,41 @@ export function TraceListPage() {
           the DAG, timeline, and per-agent blame.
         </p>
       </motion.div>
+
+      {/* Open incidents banner (ENG-11) */}
+      {openIncidents > 0 && (
+        <div className="mb-6 flex items-center gap-3 hairline rounded-sm bg-cherry/10 border-cherry/40 px-4 py-3">
+          <span className="inline-block w-2 h-2 rounded-full bg-cherry animate-pulse" />
+          <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-cherry-light">
+            {openIncidents} open incident{openIncidents > 1 ? "s" : ""}
+          </span>
+          <Link
+            to="/incidents"
+            className="ml-auto font-mono text-[11px] uppercase tracking-wider text-cream-300 hover:text-cream-50 hairline rounded-sm px-3 py-1 hover:bg-ink-700 transition-colors"
+          >
+            view all →
+          </Link>
+        </div>
+      )}
+
+      {/* Agent filter badge (drill-down from /blame) */}
+      {agentId && (
+        <div className="mb-6 flex items-center gap-3 hairline rounded-sm bg-cherry/10 border-cherry/40 px-4 py-3">
+          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-cherry-light">
+            filtered by agent
+          </span>
+          <span className="font-display italic text-[18px] text-cream-50">
+            {agentId}
+          </span>
+          <button
+            type="button"
+            onClick={clearAgentFilter}
+            className="ml-auto font-mono text-[11px] uppercase tracking-wider text-cream-300 hover:text-cream-50 hairline rounded-sm px-3 py-1 hover:bg-ink-700 transition-colors"
+          >
+            clear ✕
+          </button>
+        </div>
+      )}
 
       {/* Filter row */}
       <div className="flex items-center justify-between mb-6">

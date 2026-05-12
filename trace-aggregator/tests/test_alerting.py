@@ -194,54 +194,51 @@ class TestSLOBreach(unittest.TestCase):
 
 
 class TestCooldownLogic(unittest.TestCase):
-    def test_first_fire_allowed(self):
-        last_sent = {}
-        now = time.time()
+    """ENG-11: cooldown now lives in the incidents state machine, not an
+    in-memory dict. We verify the same behavior through `record_alert`."""
 
-        def should_send(alert_type, key, cooldown=300):
-            dk = f"{alert_type}:{key}"
-            if now - last_sent.get(dk, 0.0) < cooldown:
-                return False
-            last_sent[dk] = now
-            return True
+    def _existing_row(self, state, occurrence_count=1):
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        return (
+            "runaway_tokens:trace:t1", "runaway_tokens", state, "high",
+            "old", "{}", now - timedelta(minutes=1), now,
+            datetime(1970, 1, 1, tzinfo=timezone.utc),
+            datetime(1970, 1, 1, tzinfo=timezone.utc),
+            occurrence_count,
+        )
 
-        self.assertTrue(should_send("runaway_tokens", "trace:t1"))
+    def _alert(self, key="trace:t1"):
+        from alerting.worker import Alert
+        return Alert(
+            alert_type="runaway_tokens", key=key, severity="high",
+            message="Test", details={"trace_id": key.split(":")[-1]},
+        )
 
-    def test_second_fire_within_cooldown_suppressed(self):
-        last_sent = {}
-        now = time.time()
+    def test_first_fire_creates_new_incident(self):
+        from alerting.incidents import record_alert
+        client = MagicMock()
+        client.query.return_value = MagicMock(result_rows=[])
+        self.assertEqual(record_alert(client, self._alert()), "new")
 
-        def should_send(alert_type, key, cooldown=300):
-            dk = f"{alert_type}:{key}"
-            if now - last_sent.get(dk, 0.0) < cooldown:
-                return False
-            last_sent[dk] = now
-            return True
+    def test_second_fire_returns_existing_not_new(self):
+        from alerting.incidents import record_alert
+        client = MagicMock()
+        client.query.return_value = MagicMock(result_rows=[self._existing_row("open")])
+        self.assertEqual(record_alert(client, self._alert()), "existing")
 
-        should_send("runaway_tokens", "trace:t1")
-        self.assertFalse(should_send("runaway_tokens", "trace:t1"))
+    def test_different_keys_each_get_new_incident(self):
+        from alerting.incidents import record_alert
+        client = MagicMock()
+        client.query.return_value = MagicMock(result_rows=[])  # no existing for either
+        self.assertEqual(record_alert(client, self._alert("trace:t1")), "new")
+        self.assertEqual(record_alert(client, self._alert("trace:t2")), "new")
 
-    def test_different_keys_not_suppressed(self):
-        last_sent = {}
-        now = time.time()
-
-        def should_send(alert_type, key, cooldown=300):
-            dk = f"{alert_type}:{key}"
-            if now - last_sent.get(dk, 0.0) < cooldown:
-                return False
-            last_sent[dk] = now
-            return True
-
-        should_send("runaway_tokens", "trace:t1")
-        self.assertTrue(should_send("runaway_tokens", "trace:t2"))
-
-    def test_expired_cooldown_allows_re_fire(self):
-        last_sent = {"runaway_tokens:trace:t1": time.time() - 400}
-        now = time.time()
-
-        dk = "runaway_tokens:trace:t1"
-        is_suppressed = (now - last_sent.get(dk, 0.0)) < 300
-        self.assertFalse(is_suppressed)
+    def test_re_fire_after_resolve_returns_reopened(self):
+        from alerting.incidents import record_alert
+        client = MagicMock()
+        client.query.return_value = MagicMock(result_rows=[self._existing_row("resolved")])
+        self.assertEqual(record_alert(client, self._alert()), "reopened")
 
 
 class TestSendWebhook(unittest.TestCase):
