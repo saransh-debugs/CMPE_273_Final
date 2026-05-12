@@ -142,3 +142,10 @@ export interface RootCauseEdge {
   uncertainty: string;
   chain_rank?: number;
 }
+
+export type TraceListResponse = {
+  items: TraceSummary[];
+  next_cursor: string | null;
+  has_more: boolean;
+  limit: number;
+};

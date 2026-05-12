@@ -1,5 +1,6 @@
 import type {
   TraceSummary,
+  TraceListResponse,
   TraceDetail,
   GlobalBlameRow,
   DecisionEvent,
@@ -20,10 +21,15 @@ async function get<T>(path: string): Promise<T> {
 
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
-  listTraces: (limit = 50, hasErrors?: boolean) => {
+  listTraces: (
+  limit = 50,
+  hasErrors?: boolean,
+  cursor?: string,
+  ): Promise<TraceListResponse> => {
     const params = new URLSearchParams({ limit: String(limit) });
     if (hasErrors !== undefined) params.set("has_errors", String(hasErrors));
-    return get<TraceSummary[]>(`/traces?${params}`);
+    if (cursor) params.set("cursor", cursor);
+    return get<TraceListResponse>(`/traces?${params}`);
   },
   getTrace: (id: string) => get<TraceDetail>(`/traces/${id}`),
   getDecisions: (id: string) =>
