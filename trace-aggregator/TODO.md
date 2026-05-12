@@ -353,28 +353,28 @@ Added 12 new tests to `engine/tests.py` (determinism corpus section):
 
 Run: `python -m engine.tests`
 
-### ENG-06: Root-Cause Attribution Model v2
+### ENG-06: Root-Cause Attribution Model v2 [DONE]
 
 - **Scope:** Improve attribution beyond descendant aggregation.
 - **Dependencies:** ENG-05.
 - **Deliverables:** Versioned impact model with uncertainty propagation.
 - **Acceptance:** Ranking quality improves on labeled incident traces.
 
-### ENG-07: Query API Filter Expansion
+### ENG-07: Query API Filter Expansion [DONE]
 
 - **Scope:** Add richer forensic filters for traces/decisions.
 - **Dependencies:** None.
 - **Deliverables:** New query params + docs + validations.
 - **Acceptance:** Common forensic questions answerable without raw log scraping.
 
-### ENG-08: Cursor Pagination for Large Datasets
+### ENG-08: Cursor Pagination for Large Datasets [DONE]
 
 - **Scope:** Add scalable cursor-based pagination.
 - **Dependencies:** ENG-07.
 - **Deliverables:** Cursor contract and backward-compatible fallback.
 - **Acceptance:** High-cardinality queries complete without timeout/memory spikes.
 
-### ENG-09: Realtime Trace Streaming (SSE/WebSocket)
+### ENG-09: Realtime Trace Streaming (SSE/WebSocket) [DONE]
 
 - **Scope:** Stream active trace updates to the UI.
 - **Dependencies:** ENG-02 preferred.
