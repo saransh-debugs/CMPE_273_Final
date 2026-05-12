@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS tracing.reconstructed_traces (
     -- Per-agent blame breakdown as JSON
     blame_json      String,
 
+    blame_v2_json String DEFAULT '[]',
     -- The user prompt / task description that initiated this trace
     input_text      String DEFAULT '',
 
@@ -226,6 +227,14 @@ def setup() -> None:
     except Exception:
         pass
 
+    print("→ Ensuring blame_v2_json column on reconstructed_traces...")    # ← NEW
+    try:                                                                    # ← NEW
+        client.command(                                                     # ← NEW
+            "ALTER TABLE tracing.reconstructed_traces "                     # ← NEW
+            "ADD COLUMN IF NOT EXISTS blame_v2_json String DEFAULT '[]'"    # ← NEW
+        )                                                                   # ← NEW
+    except Exception:                                                       # ← NEW
+        pass    
     print("→ Ensuring idempotency_key columns on raw tables...")
     try:
         client.command("ALTER TABLE tracing.raw_spans ADD COLUMN IF NOT EXISTS idempotency_key String DEFAULT ''")

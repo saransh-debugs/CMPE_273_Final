@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
-import { api } from "../api";
+import { api, openTraceStream } from "../api";
 import type { TraceSummary } from "../types";
 import { fmtDateTime, fmtMs, fmtTokens, shortId } from "../utils/format";
 
@@ -13,25 +13,96 @@ export function TraceListPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
 
+  // NEW state for cursor pagination
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const [live, setLive] = useState(true);   // toggle SSE vs polling
+
   useEffect(() => {
     let cancel = false;
     const hasErrors = filter === "errors" ? true : filter === "clean" ? false : undefined;
 
-    const fetch = () => {
-      setLoading((prev) => (prev ? true : false)); // only show spinner on first load
-      setError(null);
-      api
-        .listTraces(50, hasErrors)
-        .then((rows) => { if (!cancel) { setTraces(rows); setLoading(false); } })
-        .catch((e) => { if (!cancel) { setError(String(e)); setLoading(false); } });
-    };
-
+    // Initial fetch: always populate the table with the latest traces.
     setLoading(true);
-    fetch();
-    const interval = setInterval(fetch, 5000);
-    return () => { cancel = true; clearInterval(interval); };
-  }, [filter]);
+    setError(null);
+    api
+      .listTraces(50, hasErrors)
+      .then((rows) => {
+        if (cancel) return;
+        setTraces(rows.items);
+        setNextCursor(rows.next_cursor);
+        setHasMore(rows.has_more);
+        setLoading(false);
+      })
+      .catch((e) => {
+        if (!cancel) {
+          setError(String(e));
+          setLoading(false);
+        }
+      });
 
+    if (live) {
+      // ─── SSE mode ──────────────────────────────────────────────────────
+      // Open a stream and merge new traces in at the top.
+      const close = openTraceStream({
+        hasErrors,
+        onTrace: (t) => {
+          setTraces((prev) => {
+            // Replace if trace_id already exists (re-reconstruction), else prepend.
+            const i = prev.findIndex((x) => x.trace_id === t.trace_id);
+            if (i >= 0) {
+              const next = [...prev];
+              next[i] = t;
+              return next;
+            }
+            return [t, ...prev].slice(0, 500);  // cap memory
+          });
+        },
+        // onHeartbeat: (ts) => setLastHeartbeat(ts),
+        onError: (msg) => {
+          // Non-fatal — browser auto-reconnects. Show transient banner if you like.
+          console.warn("[SSE]", msg);
+        },
+      });
+      return () => {
+        cancel = true;
+        close();
+      };
+    } else {
+      // ─── Polling mode (fallback) ──────────────────────────────────────
+      const interval = setInterval(() => {
+        api
+          .listTraces(50, hasErrors)
+          .then((rows) => { if (!cancel) setTraces(rows.items); })
+          .catch(() => {});
+      }, 5000);
+      return () => {
+        cancel = true;
+        clearInterval(interval);
+      };
+    }
+  }, [filter, live]);
+
+    // Load More button handler — appends the next page
+  const loadMore = () => {
+    if (!nextCursor || loadingMore) return;
+    const hasErrors = filter === "errors" ? true : filter === "clean" ? false : undefined;
+    setLoadingMore(true);
+    api
+      .listTraces(50, hasErrors, nextCursor)
+      .then((res) => {
+        setTraces((prev) => [...prev, ...res.items]);
+        setNextCursor(res.next_cursor);
+        setHasMore(res.has_more);
+        setLoadingMore(false);
+      })
+      .catch((e) => {
+        setError(String(e));
+        setLoadingMore(false);
+      });
+  };
   return (
     <div className="max-w-[1400px] mx-auto px-8 py-12">
       {/* Heading block — editorial */}
@@ -69,14 +140,27 @@ export function TraceListPage() {
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2 font-mono text-[11px] text-cream-500">
+        <div className="flex items-center gap-3 font-mono text-[11px] text-cream-500">
           {loading ? "loading…" : `${traces.length} traces`}
-          {!loading && (
-            <span className="flex items-center gap-1 text-sage">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-sage animate-pulse" />
+
+          {/* Live / paused toggle */}
+          <button
+            type="button"
+            onClick={() => setLive((l) => !l)}
+            className={`hairline rounded-sm px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-colors flex items-center ${
               live
-            </span>
-          )}
+                ? "bg-sage/20 text-sage border-sage/40"
+                : "text-cream-300 hover:bg-ink-700"
+            }`}
+            title={live ? "Live updates via SSE — click to pause" : "Paused — click to resume live updates"}
+          >
+            <span
+              className={`inline-block w-1.5 h-1.5 rounded-full mr-2 ${
+                live ? "bg-sage animate-pulse" : "bg-cream-500"
+              }`}
+            />
+            {live ? "live" : "paused"}
+          </button>
         </div>
       </div>
 
@@ -151,6 +235,19 @@ export function TraceListPage() {
               </Link>
             </motion.div>
           ))}
+        </div>
+      )}
+      {/* Load More button — only shown when there are more pages */}
+      {hasMore && !live &&(
+        <div className="mt-6 flex justify-center">
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="hairline rounded-sm px-6 py-2 font-mono text-[11px] uppercase tracking-wider text-cream-300 hover:bg-ink-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {loadingMore ? "loading…" : "load more"}
+          </button>
         </div>
       )}
     </div>

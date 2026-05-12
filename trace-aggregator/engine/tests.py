@@ -8,7 +8,11 @@ from .dag import Span, reconstruct_dag, find_roots, serialize_dag, _precedes
 from .blame import compute_blame
 from .worker import _collect_descendants
 from generated import tracing_pb2
-
+from .blame_v2 import (
+    compute_blame_v2,
+    blame_v2_to_dicts,
+    MODEL_VERSION,
+)
 
 def test_precedes():
     assert _precedes({"a": 1}, {"a": 2})
@@ -345,7 +349,125 @@ def test_serialize_dag_stable_ordering():
         assert result == reference, "serialize_dag ordering is unstable for tied start_time_ms"
     print("  ✓ serialize_dag stable ordering with tied start_time_ms")
 
-
+def _fanout_spans():
+    """Same canonical orchestrator → research+coder → reviewer trace used
+    elsewhere. Pulled out so the V2 tests have a stable fixture."""
+    return [
+        Span("o", "", "orch", {"orch": 1}, "llm_call", 10, 10, 50, 1000),
+        Span("r", "o", "res", {"orch": 1, "res": 1}, "llm_call", 100, 100, 500, 1100),
+        Span("c", "o", "code", {"orch": 1, "code": 1}, "llm_call", 100, 100, 400, 1110),
+        Span("v", "r", "rev", {"orch": 1, "res": 1, "code": 1, "rev": 1},
+             "llm_call", 50, 50, 200, 1700),
+    ]
+ 
+ 
+def test_v2_returns_same_top_agent_as_v1():
+    """V2 must agree with V1 on which agent is most to blame — V2 only adds
+    confidence intervals on the same underlying scoring."""
+    spans = [
+        Span("a", "", "fast", {"fast": 1}, "llm_call", 10, 10, 50, 1000),
+        Span("b", "a", "slow", {"fast": 1, "slow": 1}, "llm_call", 500, 500, 5000, 1050),
+        Span("c", "b", "fast", {"fast": 2, "slow": 1}, "llm_call", 10, 10, 50, 6050),
+    ]
+    v1 = compute_blame(spans)
+    v2 = compute_blame_v2(spans, bootstrap_iters=200, seed=42)
+    assert v1[0].agent_id == v2[0].agent_id == "slow"
+    assert v2[0].model_version == MODEL_VERSION
+    print("  ✓ V2 top agent matches V1")
+ 
+ 
+def test_v2_ci_shrinks_with_more_data():
+    """More observations → tighter CI. Classic bootstrap property; if this
+    fails, our resampling is wrong."""
+    small_base = _fanout_spans()[:3]
+    large_base = _fanout_spans() * 25   # ~100 spans
+ 
+    v2_small = compute_blame_v2(small_base, bootstrap_iters=500, seed=42)
+    v2_large = compute_blame_v2(large_base, bootstrap_iters=500, seed=42)
+ 
+    width_small = v2_small[0].blame_score_ci_high - v2_small[0].blame_score_ci_low
+    width_large = v2_large[0].blame_score_ci_high - v2_large[0].blame_score_ci_low
+    assert width_large < width_small, (
+        f"Expected larger sample to have tighter CI: small={width_small}, "
+        f"large={width_large}"
+    )
+    print(f"  ✓ V2 CI shrinks with more data ({width_small:.2f} → {width_large:.2f})")
+ 
+ 
+def test_v2_deterministic_with_seed():
+    """Same input + same seed → bit-identical output. If a colleague reruns
+    the engine, blame numbers must not change."""
+    spans = _fanout_spans()
+    a = compute_blame_v2(spans, bootstrap_iters=300, seed=42)
+    b = compute_blame_v2(spans, bootstrap_iters=300, seed=42)
+ 
+    for ra, rb in zip(a, b):
+        assert ra.agent_id == rb.agent_id
+        assert ra.blame_score_ci_low == rb.blame_score_ci_low
+        assert ra.blame_score_ci_high == rb.blame_score_ci_high
+        assert ra.blame_score_std == rb.blame_score_std
+    print("  ✓ V2 is deterministic with fixed seed")
+ 
+ 
+def test_v2_error_amplification():
+    """Error spans on agents with downstream descendants get amplified;
+    leaf-error agents and clean agents have amp = 0."""
+    spans = [
+        # Root error in orchestrator — has 3 descendants downstream.
+        Span("o", "", "orch", {"orch": 1}, "error", 0, 0, 50, 1000),
+        Span("r", "o", "res", {"orch": 1, "res": 1}, "llm_call", 100, 100, 500, 1100),
+        Span("c", "o", "code", {"orch": 1, "code": 1}, "llm_call", 100, 100, 400, 1110),
+        # Leaf error in reviewer — no descendants.
+        Span("v", "r", "rev", {"orch": 1, "res": 1, "code": 1, "rev": 1},
+             "error", 0, 0, 100, 1700),
+    ]
+    nodes = reconstruct_dag(spans)
+    v2 = compute_blame_v2(spans, node_map=nodes, bootstrap_iters=200, seed=42)
+    by_agent = {b.agent_id: b for b in v2}
+ 
+    assert by_agent["orch"].error_amplification > by_agent["rev"].error_amplification
+    assert by_agent["res"].error_amplification == 0.0  # no error span at all
+    assert by_agent["code"].error_amplification == 0.0
+    print(
+        f"  ✓ V2 error amplification: orch={by_agent['orch'].error_amplification}, "
+        f"rev={by_agent['rev'].error_amplification}"
+    )
+ 
+ 
+def test_v2_components_match_score():
+    """The 3 per-agent components should sum to a value close to
+    blame_score (small drift is OK due to error amplification rounding)."""
+    spans = _fanout_spans()
+    v2 = compute_blame_v2(spans, bootstrap_iters=200, seed=42)
+    for b in v2:
+        component_sum = sum(b.components.values())
+        assert abs(component_sum - b.blame_score) < 1.0, (
+            f"{b.agent_id}: components {b.components} sum to {component_sum} "
+            f"but blame_score = {b.blame_score}"
+        )
+    print("  ✓ V2 components sum to blame_score")
+ 
+ 
+def test_v2_empty_spans():
+    """Edge case: empty input must return [] without raising."""
+    assert compute_blame_v2([]) == []
+    assert blame_v2_to_dicts([]) == []
+    print("  ✓ V2 handles empty input")
+ 
+ 
+def test_v2_json_serializable():
+    """The output must round-trip through JSON because the worker persists
+    it as blame_v2_json in ClickHouse."""
+    import json as _json
+    spans = _fanout_spans()
+    v2 = compute_blame_v2(spans, bootstrap_iters=100, seed=42)
+    dicts = blame_v2_to_dicts(v2)
+    round_tripped = _json.loads(_json.dumps(dicts))
+    assert len(round_tripped) == len(dicts)
+    assert round_tripped[0]["model_version"] == MODEL_VERSION
+    print("  ✓ V2 output is JSON-serializable")
+ 
+ 
 def main():
     print("Running engine tests:")
     # Original smoke tests
@@ -370,7 +492,14 @@ def main():
     test_blame_error_weight()
     test_blame_single_agent()
     test_blame_zero_activity()
-    test_serialize_dag_stable_ordering()
+    test_serialize_dag_stable_ordering(),
+    test_v2_returns_same_top_agent_as_v1(),
+    test_v2_ci_shrinks_with_more_data(),
+    test_v2_deterministic_with_seed(),
+    test_v2_error_amplification(),
+    test_v2_components_match_score(),
+    test_v2_empty_spans(),
+    test_v2_json_serializable()
     print("\nAll tests passed.")
 
 
