@@ -18,19 +18,52 @@ export function TraceListPage() {
     const hasErrors = filter === "errors" ? true : filter === "clean" ? false : undefined;
 
     const fetch = () => {
-      setLoading((prev) => (prev ? true : false)); // only show spinner on first load
       setError(null);
       api
         .listTraces(50, hasErrors)
-        .then((rows) => { if (!cancel) { setTraces(rows); setLoading(false); } })
-        .catch((e) => { if (!cancel) { setError(String(e)); setLoading(false); } });
+        .then((res) => {
+          if (cancel) return;
+          setTraces(res.items);              // ← unwrap items
+          setNextCursor(res.next_cursor);     // ← capture cursor
+          setHasMore(res.has_more);           // ← capture has_more
+          setLoading(false);
+        })
+        .catch((e) => {
+          if (!cancel) {
+            setError(String(e));
+            setLoading(false);
+          }
+        });
     };
 
     setLoading(true);
     fetch();
+    // Live refresh every 5s (will reset back to page 1 — intended)
     const interval = setInterval(fetch, 5000);
-    return () => { cancel = true; clearInterval(interval); };
+    return () => {
+      cancel = true;
+      clearInterval(interval);
+    };
   }, [filter]);
+
+  // Load More button handler — appends the next page
+  const loadMore = () => {
+    if (!nextCursor || loadingMore) return;
+    const hasErrors = filter === "errors" ? true : filter === "clean" ? false : undefined;
+    setLoadingMore(true);
+    api
+      .listTraces(50, hasErrors, nextCursor)
+      .then((res) => {
+        setTraces((prev) => [...prev, ...res.items]);
+        setNextCursor(res.next_cursor);
+        setHasMore(res.has_more);
+        setLoadingMore(false);
+      })
+      .catch((e) => {
+        setError(String(e));
+        setLoadingMore(false);
+      });
+  };
 
   return (
     <div className="max-w-[1400px] mx-auto px-8 py-12">
@@ -151,6 +184,19 @@ export function TraceListPage() {
               </Link>
             </motion.div>
           ))}
+        </div>
+      )}
+      {/* Load More button — only shown when there are more pages */}
+      {hasMore && (
+        <div className="mt-6 flex justify-center">
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="hairline rounded-sm px-6 py-2 font-mono text-[11px] uppercase tracking-wider text-cream-300 hover:bg-ink-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {loadingMore ? "loading…" : "load more"}
+          </button>
         </div>
       )}
     </div>
