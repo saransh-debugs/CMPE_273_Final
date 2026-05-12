@@ -381,19 +381,111 @@ Run: `python -m engine.tests`
 - **Deliverables:** Streaming backend endpoint + frontend live mode.
 - **Acceptance:** Active traces update incrementally without page refresh.
 
-### ENG-10: Forensic UI Linking Completion
+### ENG-10: Forensic UI Linking Completion [DONE]
 
 - **Scope:** Link decision -> DAG path -> timeline segment interactions.
 - **Dependencies:** ENG-09 optional.
-- **Deliverables:** Synchronized selection/highlight behavior.
-- **Acceptance:** Operator can follow root-cause chain end-to-end in UI.
+- **Deliverables:** Synchronized selection/highlight behavior. (Completed)
+- **Acceptance:** Operator can follow root-cause chain end-to-end in UI. (Met)
 
-### ENG-11: Alerting Incident Model
+#### ENG-10 Implementation Details
+
+Selection state is lifted to `TraceDetailPage` (`selectedSpanId`) and threaded
+into all three panels. Clicking a decision card's `↗ span` chip highlights
+the source span in the waterfall (cream selection ring) and the DAG tree
+(cherry-red left border + tinted background); clicking a waterfall bar or
+DAG node highlights matching decision cards. Toggle clicks deselect.
+
+- `ui/src/pages/TraceDetailPage.tsx` — shared `selectedSpanId` state lifted up
+- `ui/src/components/TimelineWaterfall.tsx` — `onSpanSelect` + selection ring
+- `ui/src/components/DAGView.tsx` — clickable rows + cherry highlight
+- `ui/src/components/DecisionPanel.tsx` — card highlight + `↗ span` chip
+- Tests: `TimelineWaterfall.test.tsx` (6), `DecisionPanel.test.tsx` (6),
+  `DAGView.test.tsx` (7) — all in `ui/src/components/`
+
+Bonus completing the cross-page forensic chain (originally outside ENG-10's
+strict scope, since `agent_id` filter was built in ENG-07 but never wired):
+- Blame agent cards on `/blame` now link to `/?agent_id=X`
+- `TraceListPage` reads `agent_id` query param and shows a "filtered by
+  agent" badge with clear button
+- `BlamePage` also gained the V1/V2 model toggle (closing an ENG-06 UI gap):
+  V2 surfaces 95% CI bounds, std dev, and DAG-depth error amplification
+- Tests: `BlamePage.test.tsx` (6)
+
+### ENG-11: Alerting Incident Model [DONE]
 
 - **Scope:** Add dedupe/cooldown and lifecycle (`open`, `ack`, `resolved`).
 - **Dependencies:** Existing alert worker.
-- **Deliverables:** Incident model and dedupe key strategy.
-- **Acceptance:** Repeated anomalies do not create alert storms.
+- **Deliverables:** Incident model and dedupe key strategy. (Completed)
+- **Acceptance:** Repeated anomalies do not create alert storms. (Met)
+
+#### ENG-11 Implementation Details
+
+In-memory cooldown dict replaced with a ClickHouse-backed incident lifecycle.
+Survives worker restarts. Webhook only pages on `new`/`reopened`; `existing`
+silently bumps `occurrence_count`. Auto-resolves after silence.
+
+**Schema** (`tracing.incidents` — ReplacingMergeTree, ORDER BY incident_key):
+`incident_key`, `alert_type`, `state` (`open`/`ack`/`resolved`), `severity`,
+`message`, `details`, `opened_at`, `last_seen_at`, `acknowledged_at`,
+`resolved_at`, `occurrence_count`, `updated_at`.
+
+**Modules:**
+- `alerting/incidents.py` (NEW) — `record_alert`, `acknowledge`, `resolve`,
+  `list_incidents`, `state_counts`, `auto_resolve_stale`
+- `alerting/worker.py` — replaced `last_sent` dict with `incidents.record_alert`;
+  calls `incidents.auto_resolve_stale(client, ALERT_AUTO_RESOLVE_SEC)` each tick
+- `db/init_db.py` — `SCHEMA_INCIDENTS` added; idempotent migration in `setup()`
+
+**API** (`api/main.py`):
+- `GET /incidents?state=open|ack|resolved&limit=N` →
+  `{items: Incident[], counts: {open: N, ack: M, resolved: K}}`
+- `POST /incidents/{key}/ack` → updated `Incident` (404 if not found)
+- `POST /incidents/{key}/resolve` → updated `Incident` (404 if not found)
+
+**UI:**
+- New `/incidents` page (`ui/src/pages/IncidentsPage.tsx`) with tab filter
+  (Open/Ack/Resolved/All), severity-colored cards, ack + resolve buttons
+- Header nav link added between Blame and SLO
+- Pulsing cherry banner on `TraceListPage` shows "N open incidents — view all →"
+  when any are open; polls `/incidents?state=open` every 10s
+
+**Tunables (env vars):**
+- `ALERT_AUTO_RESOLVE_SEC` (default `600`) — silence timeout before auto-resolve
+- `ALERT_COOLDOWN_SEC` (default `300`) — kept for backward compat (no longer
+  the primary dedup mechanism)
+
+**Webhook payload changes:**
+Now includes `incident_key` and `status` (`new`/`reopened`) so receivers
+can correlate to PagerDuty/Datadog incidents.
+
+**Tests:**
+- `tests/test_alerting_incidents.py` (NEW) — 13 cases covering new/existing/
+  reopened transitions, ack, resolve, auto-resolve, count increment
+- `tests/test_alerting.py::TestCooldownLogic` — rewritten (4 cases) since
+  in-memory dict no longer exists; same semantics verified via `record_alert`
+- `tests/test_api.py::TestIncidents` — 5 cases for list/ack/resolve endpoints
+- `ui/src/pages/IncidentsPage.test.tsx` (NEW) — 8 cases for tab switching,
+  ack/resolve button visibility per state, API call wiring
+
+#### ENG-11 Verification Steps
+
+1. Apply schema: `python -m db.init_db` → `incidents` table appears
+2. Start worker: `ALERT_POLL_INTERVAL_SEC=5 python -m alerting.worker`
+3. Emit errors: `python -m demo.pipeline` (trips error_burst on coder_agent)
+4. Confirm new incident: `curl -s http://localhost:8000/incidents | jq .`
+   - Expect: 1 item, state=open, occurrence_count=1
+5. Re-fire same condition by running pipeline again:
+   - Expect: SAME incident, occurrence_count climbs, NO new webhook log entry
+6. Ack via API: `curl -X POST http://localhost:8000/incidents/error_burst:agent:coder_agent/ack`
+   - Expect: state=ack, acknowledged_at populated
+7. Resolve: `curl -X POST .../resolve` → state=resolved, resolved_at populated
+8. Auto-resolve: set `ALERT_AUTO_RESOLVE_SEC=60`, leave condition idle for >60s
+   - Expect: worker log line `Auto-resolved N stale incident(s)`, state moves
+     to resolved without manual action
+9. UI smoke at http://localhost:5173:
+   - Cherry banner at top of Traces page when count > 0
+   - `/incidents` shows tabs with live counts; ack/resolve buttons work
 
 ### ENG-12: SLO Definition and Reporting [DONE]
 
