@@ -46,16 +46,16 @@ def _as_utc_aware(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def _resolve_first_reconstructed_at(client, trace_id: str, insert_ts_utc: datetime) -> datetime:
+def _resolve_first_reconstructed_at(client, tenant_id: str, trace_id: str, insert_ts_utc: datetime) -> datetime:
     """Carry forward immutable first reconstruction time across ReplacingMergeTree updates."""
     rows = client.query(
         """
         SELECT first_reconstructed_at, reconstructed_at
         FROM tracing.reconstructed_traces FINAL
-        WHERE trace_id = {trace_id:String}
+        WHERE tenant_id = {tenant_id:String} AND trace_id = {trace_id:String}
         LIMIT 1
         """,
-        parameters={"trace_id": trace_id},
+        parameters={"tenant_id": tenant_id, "trace_id": trace_id},
     ).result_rows
     if not rows:
         return insert_ts_utc
@@ -87,7 +87,7 @@ def _connect():
     )
 
 
-def find_active_traces(client) -> List[str]:
+def find_active_traces(client) -> List[Tuple[str, str]]:
     """Trace IDs that received spans in the lookback window.
 
     Ordered by newest last-ingest first so a sequential reconstruct loop clears
@@ -96,15 +96,16 @@ def find_active_traces(client) -> List[str]:
     """
     rows = client.query(f"""
         SELECT trace_id
+            , tenant_id
         FROM tracing.raw_spans
         WHERE ingested_at > now() - INTERVAL {LOOKBACK_SEC} SECOND
-        GROUP BY trace_id
+        GROUP BY tenant_id, trace_id
         ORDER BY max(ingested_at) DESC
     """).result_rows
-    return [r[0] for r in rows]
+    return [(r[1], r[0]) for r in rows]
 
 
-def fetch_spans(client, trace_id: str) -> List[Span]:
+def fetch_spans(client, tenant_id: str, trace_id: str) -> List[Span]:
     rows = client.query(
         """
         SELECT
@@ -120,10 +121,10 @@ def fetch_spans(client, trace_id: str) -> List[Span]:
             idempotency_key,
             ingested_at
         FROM tracing.raw_spans
-        WHERE trace_id = {trace_id:String}
+        WHERE tenant_id = {tenant_id:String} AND trace_id = {trace_id:String}
         ORDER BY start_time_ms ASC, ingested_at DESC
         """,
-        parameters={"trace_id": trace_id},
+        parameters={"tenant_id": tenant_id, "trace_id": trace_id},
     ).result_rows
     
     # Deduplicate by idempotency_key, keeping the most recent (highest ingested_at)
@@ -164,7 +165,7 @@ def fetch_spans(client, trace_id: str) -> List[Span]:
     return spans
 
 
-def fetch_decisions(client, trace_id: str) -> List[Decision]:
+def fetch_decisions(client, tenant_id: str, trace_id: str) -> List[Decision]:
     rows = client.query(
         """
         SELECT
@@ -183,10 +184,10 @@ def fetch_decisions(client, trace_id: str) -> List[Decision]:
             idempotency_key,
             ingested_at
         FROM tracing.raw_decisions
-        WHERE trace_id = {trace_id:String}
+        WHERE tenant_id = {tenant_id:String} AND trace_id = {trace_id:String}
         ORDER BY timestamp_ms ASC, ingested_at DESC
         """,
-        parameters={"trace_id": trace_id},
+        parameters={"tenant_id": tenant_id, "trace_id": trace_id},
     ).result_rows
     
     # Deduplicate by idempotency_key, keeping the most recent (highest ingested_at)
@@ -287,7 +288,7 @@ def _uncertainty_level(nodes, source_span_id: str, target_span_id: str) -> str:
     return "low"
 
 
-def _write_decision_edges(client, trace_id: str, decisions: List[Decision], spans: List[Span], nodes) -> None:
+def _write_decision_edges(client, tenant_id: str, trace_id: str, decisions: List[Decision], spans: List[Span], nodes) -> None:
     if not decisions:
         return
     by_span = _index_spans(spans)
@@ -322,6 +323,7 @@ def _write_decision_edges(client, trace_id: str, decisions: List[Decision], span
             uncertainty = _uncertainty_level(nodes, d.source_span_id, target_sid)
             rows.append(
                 (
+                    tenant_id,
                     trace_id,
                     d.decision_id,
                     d.source_span_id,
@@ -340,6 +342,7 @@ def _write_decision_edges(client, trace_id: str, decisions: List[Decision], span
                 (
                     impact_score,
                     (
+                        tenant_id,
                         trace_id,
                         d.decision_id,
                         d.source_span_id,
@@ -385,6 +388,7 @@ def _write_decision_edges(client, trace_id: str, decisions: List[Decision], span
         "tracing.decision_edges",
         rows,
         column_names=[
+                "tenant_id",
             "trace_id",
             "decision_id",
             "source_span_id",
@@ -404,6 +408,7 @@ def _write_decision_edges(client, trace_id: str, decisions: List[Decision], span
             "tracing.decision_reason_chains",
             chain_rows,
             column_names=[
+                "tenant_id",
                 "trace_id",
                 "decision_id",
                 "source_span_id",
@@ -423,7 +428,7 @@ def _write_decision_edges(client, trace_id: str, decisions: List[Decision], span
         )
 
 
-def _extract_input_text(client, trace_id: str) -> str:
+def _extract_input_text(client, tenant_id: str, trace_id: str) -> str:
     rows = client.query(
         """
         SELECT
@@ -432,11 +437,11 @@ def _extract_input_text(client, trace_id: str) -> str:
             idempotency_key,
             ingested_at
         FROM tracing.raw_spans
-        WHERE trace_id = {trace_id:String}
+        WHERE tenant_id = {tenant_id:String} AND trace_id = {trace_id:String}
         ORDER BY start_time_ms ASC, ingested_at DESC
         LIMIT 1
         """,
-        parameters={"trace_id": trace_id},
+        parameters={"tenant_id": tenant_id, "trace_id": trace_id},
     ).result_rows
     
     if not rows:
@@ -445,8 +450,8 @@ def _extract_input_text(client, trace_id: str) -> str:
     return rows[0][0] or ""
 
 
-def reconstruct_one(client, trace_id: str) -> dict:
-    spans = fetch_spans(client, trace_id)
+def reconstruct_one(client, tenant_id: str, trace_id: str) -> dict:
+    spans = fetch_spans(client, tenant_id, trace_id)
     if not spans:
         return {"trace_id": trace_id, "span_count": 0}
 
@@ -455,8 +460,8 @@ def reconstruct_one(client, trace_id: str) -> dict:
     gaps = detect_gaps(nodes)
     blame = compute_blame(spans)
     blame_v2 = compute_blame_v2(spans, node_map=nodes)
-    decisions = fetch_decisions(client, trace_id)
-    input_text = _extract_input_text(client, trace_id)
+    decisions = fetch_decisions(client, tenant_id, trace_id)
+    input_text = _extract_input_text(client, tenant_id, trace_id)
 
     total_latency = sum(s.latency_ms for s in spans)
     total_in_tok = sum(s.input_tokens for s in spans)
@@ -465,6 +470,7 @@ def reconstruct_one(client, trace_id: str) -> dict:
 
     payload = {
         "trace_id": trace_id,
+        "tenant_id": tenant_id,
         "span_count": len(spans),
         "total_latency_ms": int(total_latency),
         "total_input_tokens": int(total_in_tok),
@@ -479,7 +485,7 @@ def reconstruct_one(client, trace_id: str) -> dict:
     # Timezone-aware UTC: naive datetimes are interpreted as local time by clickhouse-connect
     # during insert (.timestamp()), which corrupts DateTime64 relative to Collector/CH defaults.
     insert_ts = datetime.now(timezone.utc)
-    anchor_first = _as_utc_aware(_resolve_first_reconstructed_at(client, trace_id, insert_ts))
+    anchor_first = _as_utc_aware(_resolve_first_reconstructed_at(client, tenant_id, trace_id, insert_ts))
     # Bad historical rows could leave first_reconstructed_at > reconstructed_at; never allow that.
     if anchor_first > insert_ts:
         anchor_first = insert_ts
@@ -487,6 +493,7 @@ def reconstruct_one(client, trace_id: str) -> dict:
     client.insert(
         "tracing.reconstructed_traces",
         [(
+            tenant_id,
             payload["trace_id"],
             insert_ts,
             payload["span_count"],
@@ -501,6 +508,7 @@ def reconstruct_one(client, trace_id: str) -> dict:
             anchor_first,
         )],
         column_names=[
+            "tenant_id",
             "trace_id",
             "reconstructed_at",
             "span_count",
@@ -515,15 +523,16 @@ def reconstruct_one(client, trace_id: str) -> dict:
             "first_reconstructed_at",
         ],
     )
-    _write_decision_edges(client, trace_id, decisions, spans, nodes)
+    _write_decision_edges(client, tenant_id, trace_id, decisions, spans, nodes)
     payload["decision_count"] = len(decisions)
     return payload
 
 
-def _reconstruct_one_task(trace_id: str) -> Tuple[str, dict]:
+def _reconstruct_one_task(task: Tuple[str, str]) -> Tuple[Tuple[str, str], dict]:
     """Isolated CH client per thread for concurrent reconstruct_one runs."""
     c = _connect()
-    return trace_id, reconstruct_one(c, trace_id)
+    tenant_id, trace_id = task
+    return task, reconstruct_one(c, tenant_id, trace_id)
 
 
 def run_loop() -> None:
@@ -548,8 +557,8 @@ def run_loop() -> None:
                             _logger.exception("Single-trace reconstruct failed")
                             continue
                         _logger.info(
-                            "Reconstructed trace=%s spans=%d decisions=%d latency=%dms errors=%d",
-                            tid, p.get("span_count", 0),
+                            "Reconstructed tenant=%s trace=%s spans=%d decisions=%d latency=%dms errors=%d",
+                            tid[0], tid[1], p.get("span_count", 0),
                             p.get("decision_count", 0),
                             p.get("total_latency_ms", 0),
                             p.get("error_count", 0),

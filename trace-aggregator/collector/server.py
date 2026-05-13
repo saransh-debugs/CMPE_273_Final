@@ -20,12 +20,14 @@ from generated import tracing_pb2, tracing_pb2_grpc
 from .metrics import METRICS
 from .metrics_server import start_metrics_server
 from .writer import BatchWriter
+from shared.trace_auth import AuthError, resolve_request_tenant
 
 _logger = logging.getLogger("collector.server")
 LISTEN_ADDR = os.environ.get("TRACE_COLLECTOR_BIND", "[::]:50051")
 OPS_LOG_INTERVAL_SEC = float(os.environ.get("OPS_LOG_INTERVAL_SEC", "30"))
 
 DECISION_COLUMNS = [
+    "tenant_id",
     "timestamp_ms",
     "trace_id",
     "decision_id",
@@ -46,7 +48,13 @@ def _span_to_row(s: tracing_pb2.AgentSpan) -> tuple:
     """Map a Protobuf span to a tuple matching writer.COLUMNS."""
     # ClickHouse Map(String, UInt32) maps from a Python dict.
     vc = {k: int(v) for k, v in s.vector_clock.items()}
+    tenant_id = "default"
+    try:
+        tenant_id = str(json.loads(s.metadata or "{}").get("tenant_id") or tenant_id)
+    except Exception:
+        pass
     return (
+        tenant_id,
         int(s.start_time_ms),
         s.trace_id,
         s.span_id,
@@ -72,7 +80,13 @@ def _decision_to_row(d: tracing_pb2.DecisionEvent) -> tuple:
         }
         for c in d.candidates
     ]
+    tenant_id = "default"
+    try:
+        tenant_id = str(json.loads(d.metadata or "{}").get("tenant_id") or tenant_id)
+    except Exception:
+        pass
     return (
+        tenant_id,
         int(d.timestamp_ms),
         d.trace_id,
         d.decision_id,
@@ -98,11 +112,22 @@ class TraceCollectorServicer(tracing_pb2_grpc.TraceCollectorServicer):
         self._span_dropped = 0
         self._decision_dropped = 0
 
+    @staticmethod
+    def _tenant_id_from_context(context: grpc.aio.ServicerContext) -> str:
+        headers = {k.lower(): v for k, v in context.invocation_metadata()}
+        return resolve_request_tenant(headers)
+
     async def RecordSpan(
         self,
         request: tracing_pb2.AgentSpan,
         context: grpc.aio.ServicerContext,
     ) -> tracing_pb2.SpanResponse:
+        try:
+            tenant_id = self._tenant_id_from_context(context)
+        except AuthError as e:
+            await context.abort(grpc.StatusCode.UNAUTHENTICATED, str(e))
+        if not request.metadata:
+            request.metadata = json.dumps({"tenant_id": tenant_id})
         accepted = self.span_writer.submit_nowait(_span_to_row(request))
         self._span_received += 1
         METRICS.inc_span_received()
@@ -121,7 +146,13 @@ class TraceCollectorServicer(tracing_pb2_grpc.TraceCollectorServicer):
         context: grpc.aio.ServicerContext,
     ) -> tracing_pb2.SpanResponse:
         n = 0
+        try:
+            tenant_id = self._tenant_id_from_context(context)
+        except AuthError as e:
+            await context.abort(grpc.StatusCode.UNAUTHENTICATED, str(e))
         async for span in request_iterator:
+            if not span.metadata:
+                span.metadata = json.dumps({"tenant_id": tenant_id})
             self._span_received += 1
             METRICS.inc_span_received()
             if self.span_writer.submit_nowait(_span_to_row(span)):
@@ -136,6 +167,12 @@ class TraceCollectorServicer(tracing_pb2_grpc.TraceCollectorServicer):
         request: tracing_pb2.DecisionEvent,
         context: grpc.aio.ServicerContext,
     ) -> tracing_pb2.DecisionResponse:
+        try:
+            tenant_id = self._tenant_id_from_context(context)
+        except AuthError as e:
+            await context.abort(grpc.StatusCode.UNAUTHENTICATED, str(e))
+        if not request.metadata:
+            request.metadata = json.dumps({"tenant_id": tenant_id})
         accepted = self.decision_writer.submit_nowait(_decision_to_row(request))
         self._decision_received += 1
         METRICS.inc_decision_received()
@@ -154,7 +191,13 @@ class TraceCollectorServicer(tracing_pb2_grpc.TraceCollectorServicer):
         context: grpc.aio.ServicerContext,
     ) -> tracing_pb2.DecisionResponse:
         n = 0
+        try:
+            tenant_id = self._tenant_id_from_context(context)
+        except AuthError as e:
+            await context.abort(grpc.StatusCode.UNAUTHENTICATED, str(e))
         async for decision in request_iterator:
+            if not decision.metadata:
+                decision.metadata = json.dumps({"tenant_id": tenant_id})
             self._decision_received += 1
             METRICS.inc_decision_received()
             if self.decision_writer.submit_nowait(_decision_to_row(decision)):

@@ -39,6 +39,7 @@ def get_client(retries: int = CONNECT_RETRIES):
 
 SCHEMA_RAW_SPANS = """
 CREATE TABLE IF NOT EXISTS tracing.raw_spans (
+    tenant_id LowCardinality(String),
     -- Server-side ingestion timestamp (when the collector wrote the row)
     ingested_at DateTime64(3) DEFAULT now64(3),
 
@@ -62,11 +63,12 @@ CREATE TABLE IF NOT EXISTS tracing.raw_spans (
     idempotency_key String
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(ingested_at)
-ORDER BY (trace_id, start_time_ms, span_id)
+ORDER BY (tenant_id, trace_id, start_time_ms, span_id)
 """
 
 SCHEMA_RECONSTRUCTED_TRACES = """
 CREATE TABLE IF NOT EXISTS tracing.reconstructed_traces (
+    tenant_id       LowCardinality(String),
     trace_id        String,
     reconstructed_at DateTime64(3) DEFAULT now64(3),
 
@@ -93,11 +95,12 @@ CREATE TABLE IF NOT EXISTS tracing.reconstructed_traces (
     -- on ReplacingMergeTree updates so merges do not erase time-to-first-DAG).
     first_reconstructed_at DateTime64(3) DEFAULT toDateTime64(0, 3, 'UTC')
 ) ENGINE = ReplacingMergeTree(reconstructed_at)
-ORDER BY trace_id
+ORDER BY (tenant_id, trace_id)
 """
 
 SCHEMA_RAW_DECISIONS = """
 CREATE TABLE IF NOT EXISTS tracing.raw_decisions (
+    tenant_id LowCardinality(String),
     ingested_at DateTime64(3) DEFAULT now64(3),
     timestamp_ms UInt64,
 
@@ -117,11 +120,12 @@ CREATE TABLE IF NOT EXISTS tracing.raw_decisions (
     idempotency_key String
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(ingested_at)
-ORDER BY (trace_id, timestamp_ms, decision_id)
+ORDER BY (tenant_id, trace_id, timestamp_ms, decision_id)
 """
 
 SCHEMA_DECISION_EDGES = """
 CREATE TABLE IF NOT EXISTS tracing.decision_edges (
+    tenant_id String,
     trace_id String,
     decision_id String,
     source_span_id String,
@@ -139,7 +143,7 @@ CREATE TABLE IF NOT EXISTS tracing.decision_edges (
 
     reconstructed_at DateTime64(3) DEFAULT now64(3)
 ) ENGINE = ReplacingMergeTree(reconstructed_at)
-ORDER BY (trace_id, decision_id, target_span_id)
+ORDER BY (tenant_id, trace_id, decision_id, target_span_id)
 """
 
 SCHEMA_SLO_STATUS = """
@@ -181,6 +185,7 @@ ORDER BY incident_key
 
 SCHEMA_DECISION_REASON_CHAINS = """
 CREATE TABLE IF NOT EXISTS tracing.decision_reason_chains (
+    tenant_id String,
     trace_id String,
     decision_id String,
     source_span_id String,
@@ -201,7 +206,7 @@ CREATE TABLE IF NOT EXISTS tracing.decision_reason_chains (
 
     reconstructed_at DateTime64(3) DEFAULT now64(3)
 ) ENGINE = ReplacingMergeTree(reconstructed_at)
-ORDER BY (trace_id, decision_id, chain_rank, target_span_id)
+ORDER BY (tenant_id, trace_id, decision_id, chain_rank, target_span_id)
 """
 
 
@@ -239,6 +244,19 @@ def setup() -> None:
         client.command("ALTER TABLE tracing.reconstructed_traces ADD COLUMN IF NOT EXISTS input_text String DEFAULT ''")
     except Exception:
         pass
+
+    print("→ Ensuring tenant_id columns on trace tables...")
+    for stmt in [
+        "ALTER TABLE tracing.raw_spans ADD COLUMN IF NOT EXISTS tenant_id LowCardinality(String) DEFAULT 'default'",
+        "ALTER TABLE tracing.raw_decisions ADD COLUMN IF NOT EXISTS tenant_id LowCardinality(String) DEFAULT 'default'",
+        "ALTER TABLE tracing.reconstructed_traces ADD COLUMN IF NOT EXISTS tenant_id LowCardinality(String) DEFAULT 'default'",
+        "ALTER TABLE tracing.decision_edges ADD COLUMN IF NOT EXISTS tenant_id LowCardinality(String) DEFAULT 'default'",
+        "ALTER TABLE tracing.decision_reason_chains ADD COLUMN IF NOT EXISTS tenant_id LowCardinality(String) DEFAULT 'default'",
+    ]:
+        try:
+            client.command(stmt)
+        except Exception:
+            pass
 
     print("→ Ensuring first_reconstructed_at on reconstructed_traces...")
     try:

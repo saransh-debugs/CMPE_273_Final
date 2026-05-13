@@ -13,10 +13,11 @@ from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
 
 import clickhouse_connect
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from api.cursor import TraceCursor, maybe_decode
 from sse_starlette.sse import EventSourceResponse   
+from shared.trace_auth import AuthError, resolve_request_tenant
 
 app = FastAPI(title="Trace Aggregator API", version="0.1.0")
 
@@ -42,6 +43,18 @@ def _iso_utc(dt) -> str:
     else:
         dt = dt.astimezone(timezone.utc)
     return dt.isoformat().replace("+00:00", "Z")
+
+
+def _require_tenant(request: Request) -> str:
+    try:
+        return resolve_request_tenant(request.headers)
+    except AuthError as e:
+        raise HTTPException(401, str(e))
+
+
+def _tenant_clause(tenant_id: str, clauses: list[str], params: dict) -> None:
+    clauses.append("tenant_id = {tenant_id:String}")
+    params["tenant_id"] = tenant_id
 
 
 @app.get("/health")
@@ -82,6 +95,7 @@ def list_traces(
     max_latency_ms: Optional[int] = Query(None, ge=0),
     metadata_key: Optional[str] = Query(None, min_length=1, max_length=128),
     metadata_value: Optional[str] = Query(None, max_length=1024),
+    tenant_id: str = Depends(_require_tenant),
 ):
     """List recent trace reconstructions with cursor pagination.
 
@@ -132,6 +146,7 @@ def list_traces(
     # ────────────────────────────────────────────────────────────────────
     outer_clauses: list[str] = []
     params: dict = {}
+    _tenant_clause(tenant_id, outer_clauses, params)
 
     # Time window
     if hours is not None:
@@ -191,7 +206,7 @@ def list_traces(
     if span_subquery_clauses:
         outer_clauses.append(f"""trace_id IN (
             SELECT DISTINCT trace_id FROM tracing.raw_spans
-            WHERE {" AND ".join(span_subquery_clauses)}
+            WHERE tenant_id = {tenant_id:String} AND {" AND ".join(span_subquery_clauses)}
         )""")
 
     where_sql = ("WHERE " + " AND ".join(outer_clauses)) if outer_clauses else ""
@@ -212,6 +227,7 @@ def list_traces(
                input_text
         FROM (
             SELECT
+                tenant_id,
                 trace_id,
                 argMax(span_count, reconstructed_at) AS span_count,
                 argMax(total_latency_ms, reconstructed_at) AS total_latency_ms,
@@ -221,7 +237,7 @@ def list_traces(
                 max(reconstructed_at) AS latest_reconstructed_at,
                 argMax(input_text, reconstructed_at) AS input_text
             FROM tracing.reconstructed_traces
-            GROUP BY trace_id
+            GROUP BY tenant_id, trace_id
         )
         {where_sql}
         ORDER BY latest_reconstructed_at DESC, trace_id DESC
@@ -464,6 +480,7 @@ async def stream_traces(
     request: Request,
     has_errors: Optional[bool] = None,
     agent_id: Optional[str] = Query(None, min_length=1, max_length=128),
+    tenant_id: str = Depends(_require_tenant),
 ):
     """Server-Sent Events stream of newly reconstructed traces.
 
@@ -507,9 +524,11 @@ async def stream_traces(
         if agent_id is not None:
             clauses.append("""trace_id IN (
                 SELECT DISTINCT trace_id FROM tracing.raw_spans
-                WHERE agent_id = {agent_id:String}
+                WHERE tenant_id = {tenant_id:String} AND agent_id = {agent_id:String}
             )""")
             params["agent_id"] = agent_id
+
+        params["tenant_id"] = tenant_id
 
         where_sql = " AND ".join(clauses)
 
@@ -538,6 +557,7 @@ async def stream_traces(
                                 max(reconstructed_at) AS latest_reconstructed_at,
                                 argMax(input_text, reconstructed_at) AS input_text
                             FROM tracing.reconstructed_traces
+                            WHERE tenant_id = {tenant_id:String}
                             GROUP BY trace_id
                         )
                         WHERE {where_sql}
@@ -600,7 +620,7 @@ async def stream_traces(
     
 @app.get("/traces/{trace_id}")
 @app.get("/traces/{trace_id}")
-def get_trace(trace_id: str):
+def get_trace(trace_id: str, tenant_id: str = Depends(_require_tenant)):
     """Full DAG + blame (V1 and V2) for a specific trace."""
     rows = _client().query(
         """
@@ -609,9 +629,9 @@ def get_trace(trace_id: str):
                dag_json, blame_json, reconstructed_at, input_text,
                blame_v2_json
         FROM tracing.reconstructed_traces FINAL
-        WHERE trace_id = {trace_id:String}
+        WHERE tenant_id = {tenant_id:String} AND trace_id = {trace_id:String}
         """,
-        parameters={"trace_id": trace_id},
+        parameters={"tenant_id": tenant_id, "trace_id": trace_id},
     ).result_rows
     if not rows:
         raise HTTPException(404, f"Trace {trace_id} not found")
@@ -629,13 +649,13 @@ def get_trace(trace_id: str):
         "input_text": r[9] or "",
         "blame_v2": json.loads(r[10] or "[]"),   # ← Now at index 10
     }
-    decisions = _query_trace_decisions(trace_id=trace_id, limit=200, offset=0)
+    decisions = _query_trace_decisions(trace_id=trace_id, tenant_id=tenant_id, limit=200, offset=0)
     trace_payload["decisions"] = decisions
     trace_payload["decision_count"] = len(decisions)
     return trace_payload
 
 @app.get("/traces/{trace_id}/spans")
-def get_raw_spans(trace_id: str):
+def get_raw_spans(trace_id: str, tenant_id: str = Depends(_require_tenant)):
     """Raw spans for the timeline view — pre-reconstruction."""
     rows = _client().query(
         """
@@ -653,10 +673,10 @@ def get_raw_spans(trace_id: str):
              idempotency_key,
              ingested_at
          FROM tracing.raw_spans
-         WHERE trace_id = {trace_id:String}
+         WHERE tenant_id = {tenant_id:String} AND trace_id = {trace_id:String}
          ORDER BY start_time_ms ASC, ingested_at DESC
         """,
-        parameters={"trace_id": trace_id},
+        parameters={"tenant_id": tenant_id, "trace_id": trace_id},
     ).result_rows
     
     # Deduplicate by idempotency_key, keeping the most recent
@@ -693,9 +713,10 @@ def _query_trace_decisions(
     metadata_query: Optional[str] = None,
     limit: int = 200,
     offset: int = 0,
+    tenant_id: str = "default",
 ):
-    clauses = ["trace_id = {trace_id:String}"]
-    params = {"trace_id": trace_id}
+    clauses = ["tenant_id = {tenant_id:String}", "trace_id = {trace_id:String}"]
+    params = {"tenant_id": tenant_id, "trace_id": trace_id}
     if decision_type:
         clauses.append("decision_type = {decision_type:String}")
         params["decision_type"] = decision_type
@@ -787,6 +808,7 @@ def get_trace_decisions(
     metadata_query: Optional[str] = None,
     limit: int = Query(200, ge=1, le=2000),
     offset: int = Query(0, ge=0),
+    tenant_id: str = Depends(_require_tenant),
 ):
     return _query_trace_decisions(
         trace_id=trace_id,
@@ -799,6 +821,7 @@ def get_trace_decisions(
         metadata_query=metadata_query,
         limit=limit,
         offset=offset,
+        tenant_id=tenant_id,
     )
 
 
@@ -811,9 +834,10 @@ def get_root_cause(
     confidence_max: Optional[float] = Query(None, ge=0.0, le=1.0),
     limit: int = Query(200, ge=1, le=2000),
     offset: int = Query(0, ge=0),
+    tenant_id: str = Depends(_require_tenant),
 ):
-    clauses = ["trace_id = {trace_id:String}"]
-    params = {"trace_id": trace_id}
+    clauses = ["tenant_id = {tenant_id:String}", "trace_id = {trace_id:String}"]
+    params = {"tenant_id": tenant_id, "trace_id": trace_id}
     if decision_type:
         clauses.append("decision_type = {decision_type:String}")
         params["decision_type"] = decision_type
@@ -935,6 +959,7 @@ def get_slo_status(history_limit: int = Query(20, ge=1, le=500)):
 def aggregate_blame(
     hours: int = Query(24, ge=1, le=720),
     model_version: str = Query("v1", pattern="^v[12]$"),
+    tenant_id: str = Depends(_require_tenant),
 ):
     """Aggregate per-agent blame across all traces in the time window.
 
@@ -951,7 +976,8 @@ def aggregate_blame(
     rows = client.query(f"""
         SELECT {column}
         FROM tracing.reconstructed_traces
-        WHERE reconstructed_at >= now() - INTERVAL {hours} HOUR
+                WHERE tenant_id = {tenant_id:String}
+                    AND reconstructed_at >= now() - INTERVAL {hours} HOUR
     """).result_rows
 
     # Aggregate by agent_id across all traces in the window.

@@ -29,6 +29,7 @@ from .client import emit_span
 from .core import (
     ALLOWED_DECISION_TYPES,
     PARENT_SPAN_KEY,
+    TENANT_ID_KEY,
     TRACE_ID_KEY,
     VECTOR_CLOCK_KEY,
     begin_span,
@@ -94,6 +95,7 @@ def instrument_decision(
                     trace_id=trace_id,
                     source_span_id=source_span_id,
                     actor_agent_id=actor_agent_id,
+                    tenant_id=str(state.get(TENANT_ID_KEY, "")),
                     decision_type=decision_type,
                     selected_candidate_id=str(result.get("selected_candidate_id", "")),
                     confidence=float(result.get("confidence", 0.0) or 0.0),
@@ -134,6 +136,7 @@ def decide_then_act(
                 trace_id=trace_id,
                 source_span_id=source_span_id,
                 actor_agent_id=actor_agent_id,
+                tenant_id=str(state.get(TENANT_ID_KEY, "")),
                 decision_type=decision_type,
                 selected_candidate_id=str(payload.get("selected_candidate_id", "")),
                 confidence=float(payload.get("confidence", 0.0) or 0.0),
@@ -175,6 +178,7 @@ def instrument_node(
                 trace_id=state.get(TRACE_ID_KEY),
                 vector_clock=state.get(VECTOR_CLOCK_KEY),
                 parent_span_id=state.get(PARENT_SPAN_KEY),
+                tenant_id=str(state.get(TENANT_ID_KEY, "")),
             )
             state[PARENT_SPAN_KEY] = span_ctx.span_id
 
@@ -202,6 +206,7 @@ def instrument_node(
             out[TRACE_ID_KEY] = span_ctx.trace_id
             out[VECTOR_CLOCK_KEY] = span_ctx.vector_clock
             out[PARENT_SPAN_KEY] = span_ctx.span_id
+            out[TENANT_ID_KEY] = span_ctx.tenant_id
             return out
 
         return wrapped

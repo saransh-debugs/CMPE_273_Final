@@ -8,6 +8,7 @@ from .instrument import (
     new_trace_context,
     validate_decision_payload,
     TRACE_ID_KEY,
+    TENANT_ID_KEY,
     VECTOR_CLOCK_KEY,
     PARENT_SPAN_KEY,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "ALLOWED_DECISION_TYPES",
     "new_trace_context",
     "TRACE_ID_KEY",
+    "TENANT_ID_KEY",
     "VECTOR_CLOCK_KEY",
     "PARENT_SPAN_KEY",
     "SpanContext",

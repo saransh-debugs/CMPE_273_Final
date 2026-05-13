@@ -22,6 +22,7 @@ from typing import Optional, Tuple, Union
 import grpc
 
 from generated import tracing_pb2, tracing_pb2_grpc
+from shared.trace_auth import client_call_metadata
 
 _logger = logging.getLogger("trace_sdk")
 
@@ -38,6 +39,7 @@ class _SpanShipper:
 
     def __init__(self, target: str = DEFAULT_TARGET):
         self.target = target
+        self._metadata = client_call_metadata()
         self._queue: "queue.Queue[Optional[Tuple[str, Union[tracing_pb2.AgentSpan, tracing_pb2.DecisionEvent]]]]" = queue.Queue(QUEUE_MAX)
         self._channel: Optional[grpc.Channel] = None
         self._stub: Optional[tracing_pb2_grpc.TraceCollectorStub] = None
@@ -84,9 +86,9 @@ class _SpanShipper:
                 stub = self._ensure_channel()
                 kind, payload = item
                 if kind == "span":
-                    stub.RecordSpan(payload, timeout=2.0)
+                    stub.RecordSpan(payload, timeout=2.0, metadata=self._metadata)
                 else:
-                    stub.RecordDecision(payload, timeout=2.0)
+                    stub.RecordDecision(payload, timeout=2.0, metadata=self._metadata)
             except grpc.RpcError as e:
                 ident = (
                     payload.span_id

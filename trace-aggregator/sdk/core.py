@@ -13,12 +13,14 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Tuple
 from pydantic import BaseModel, Field, ValidationError
 
 from generated import tracing_pb2
+from shared.trace_auth import DEFAULT_TENANT_ID
 
 METADATA_CHAR_LIMIT = 4_000
 TRACE_ID_KEY = "_trace_id"
 VECTOR_CLOCK_KEY = "_vector_clock"
 PARENT_SPAN_KEY = "_parent_span_id"
 INPUT_TEXT_KEY = "_input_text"
+TENANT_ID_KEY = "_tenant_id"
 
 ALLOWED_DECISION_TYPES = {"agent_handoff", "tool_select", "route_branch"}
 
@@ -120,16 +122,18 @@ class SpanContext:
     trace_id: str
     span_id: str
     parent_span_id: str
+    tenant_id: str
     vector_clock: Dict[str, int]
     start_time_ms: int
     t0_perf: float
 
 
-def new_trace_context(input_text: str = "") -> Dict[str, Any]:
+def new_trace_context(input_text: str = "", tenant_id: str = "") -> Dict[str, Any]:
     ctx: Dict[str, Any] = {
         TRACE_ID_KEY: str(uuid.uuid4()),
         VECTOR_CLOCK_KEY: {},
         PARENT_SPAN_KEY: "",
+        TENANT_ID_KEY: tenant_id or DEFAULT_TENANT_ID,
     }
     if input_text:
         ctx[INPUT_TEXT_KEY] = input_text
@@ -273,6 +277,7 @@ def emit_decision_event(
     trace_id: str,
     source_span_id: str,
     actor_agent_id: str,
+    tenant_id: str = "",
     decision_type: str,
     selected_candidate_id: str,
     confidence: float,
@@ -289,6 +294,7 @@ def emit_decision_event(
     decision_id = str(uuid.uuid4())
 
     raw_meta = dict(metadata or {})
+    raw_meta["tenant_id"] = tenant_id or DEFAULT_TENANT_ID
     violations = validate_rationale(str(rationale_summary))
     if violations:
         raw_meta["rationale_violations"] = violations
@@ -352,6 +358,7 @@ def begin_span(
     trace_id: Optional[str],
     vector_clock: Optional[Mapping[str, int]],
     parent_span_id: Optional[str],
+    tenant_id: str = "",
 ) -> SpanContext:
     next_trace_id = str(trace_id) if trace_id else str(uuid.uuid4())
     clock: Dict[str, int] = dict(vector_clock or {})
@@ -360,6 +367,7 @@ def begin_span(
         trace_id=next_trace_id,
         span_id=str(uuid.uuid4()),
         parent_span_id=parent_span_id or "",
+        tenant_id=tenant_id or DEFAULT_TENANT_ID,
         vector_clock=clock,
         start_time_ms=int(time.time() * 1000),
         t0_perf=time.perf_counter(),
@@ -394,6 +402,7 @@ def build_span(
     if input_text:
         # LLM-06: redact PII before storing input_text in span metadata
         meta["input_text"] = truncate_text(redact_sensitive(str(input_text)), 1000)
+    meta["tenant_id"] = ctx.tenant_id
 
     if error is not None:
         meta["error_type"] = type(error).__name__

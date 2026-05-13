@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+import os
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -27,6 +28,54 @@ class TestHealth(unittest.TestCase):
             client = TestClient(app)
             r = client.get("/health")
         self.assertEqual(r.status_code, 503)
+
+
+class TestTenantAuth(unittest.TestCase):
+    def test_default_tenant_still_works_without_headers(self) -> None:
+        mock_ch = MagicMock()
+        mock_ch.query.return_value = MagicMock(result_rows=[])
+        with patch("api.main._client", return_value=mock_ch):
+            client = TestClient(app)
+            r = client.get("/traces")
+        self.assertEqual(r.status_code, 200)
+
+    def test_cross_tenant_trace_read_is_blocked(self) -> None:
+        with patch.dict(os.environ, {"TRACE_TENANT_KEYS": '{"tenant-a":"key-a","tenant-b":"key-b"}'}, clear=False):
+            def query_side_effect(sql, parameters=None):
+                params = parameters or {}
+                sql_text = str(sql)
+                if "FROM tracing.reconstructed_traces" in sql_text and params.get("tenant_id") == "tenant-a":
+                    return MagicMock(result_rows=[(
+                        "trace-1",
+                        1,
+                        1,
+                        1,
+                        1,
+                        0,
+                        "{\"nodes\": []}",
+                        "[]",
+                        None,
+                        "",
+                        "[]",
+                    )])
+                if "FROM tracing.raw_decisions" in sql_text:
+                    return MagicMock(result_rows=[])
+                return MagicMock(result_rows=[])
+
+            mock_ch = MagicMock()
+            mock_ch.query.side_effect = query_side_effect
+            with patch("api.main._client", return_value=mock_ch):
+                client = TestClient(app)
+                good = client.get(
+                    "/traces/trace-1",
+                    headers={"X-Tenant-ID": "tenant-a", "Authorization": "Bearer key-a"},
+                )
+                bad = client.get(
+                    "/traces/trace-1",
+                    headers={"X-Tenant-ID": "tenant-b", "Authorization": "Bearer key-b"},
+                )
+        self.assertEqual(good.status_code, 200)
+        self.assertEqual(bad.status_code, 404)
 
 
 class TestSloEndpoint(unittest.TestCase):

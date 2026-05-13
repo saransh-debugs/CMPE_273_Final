@@ -28,6 +28,7 @@ FLUSH_INTERVAL_SEC = float(os.environ.get("FLUSH_INTERVAL_SEC", "1.0"))
 QUEUE_MAX = int(os.environ.get("QUEUE_MAX", "50000"))
 
 SPAN_COLUMNS = [
+    "tenant_id",
     "start_time_ms",
     "trace_id",
     "span_id",
