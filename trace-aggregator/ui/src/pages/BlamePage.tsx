@@ -37,10 +37,10 @@ export function BlamePage() {
         className="mb-12"
       >
         <div className="eyebrow mb-3">cross-trace attribution</div>
-        <h1 className="font-display text-[64px] leading-[0.95] tracking-tightest text-cream-50">
+        <h1 className="font-display text-[64px] leading-[0.95] tracking-tightest text-white">
           The <span className="italic text-cherry-light">blame</span> ledger
         </h1>
-        <p className="mt-4 font-display italic text-[18px] text-cream-300 max-w-xl">
+        <p className="mt-4 font-display italic text-[18px] text-fg-300 max-w-xl">
           Which agents are burning time, tokens, and trust across every recent run?
           Click an agent to see only its traces.
         </p>
@@ -57,8 +57,8 @@ export function BlamePage() {
                 onClick={() => setHours(h)}
                 className={`px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-colors ${
                   hours === h
-                    ? "bg-cream-50 text-ink-900"
-                    : "text-cream-300 hover:bg-ink-700"
+                    ? "bg-white text-ink-900"
+                    : "text-fg-300 hover:bg-ink-700"
                 }`}
               >
                 {h === 168 ? "7d" : `${h}h`}
@@ -75,8 +75,8 @@ export function BlamePage() {
                 onClick={() => setModel(m)}
                 className={`px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-colors ${
                   model === m
-                    ? "bg-cream-50 text-ink-900"
-                    : "text-cream-300 hover:bg-ink-700"
+                    ? "bg-white text-ink-900"
+                    : "text-fg-300 hover:bg-ink-700"
                 }`}
                 title={
                   m === "v1"
@@ -90,7 +90,7 @@ export function BlamePage() {
           </div>
         </div>
 
-        <div className="font-mono text-[11px] text-cream-500">
+        <div className="font-mono text-[11px] text-500">
           {loading ? "loading…" : `${rows.length} agents`}
         </div>
       </div>
@@ -103,11 +103,11 @@ export function BlamePage() {
 
       {!error && !loading && rows.length === 0 && (
         <div className="hairline rounded-sm p-12 text-center">
-          <div className="font-display italic text-[20px] text-cream-300 mb-2">
+          <div className="font-display italic text-[20px] text-fg-300 mb-2">
             No agent data yet.
           </div>
-          <div className="font-mono text-[12px] text-cream-500">
-            Run <span className="text-cream-100">python -m demo.pipeline</span> to
+          <div className="font-mono text-[12px] text-500">
+            Run <span className="text-fg-100">python -m demo.pipeline</span> to
             emit some traces.
           </div>
         </div>
@@ -131,14 +131,14 @@ export function BlamePage() {
               >
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-baseline gap-3">
-                    <span className="font-mono text-[10px] text-cream-500 tabular-nums w-6">
+                    <span className="font-mono text-[10px] text-500 tabular-nums w-6">
                       {String(i + 1).padStart(2, "0")}
                     </span>
                     <span
                       className="inline-block w-2.5 h-2.5 rounded-full"
                       style={{ background: c }}
                     />
-                    <span className="font-display text-[22px] italic tracking-tighter text-cream-50 group-hover:text-cherry-light transition-colors">
+                    <span className="font-display text-[22px] italic tracking-tighter text-white group-hover:text-cherry-light transition-colors">
                       {r.agent_id}
                     </span>
                     {r.error_count > 0 && (
@@ -147,7 +147,7 @@ export function BlamePage() {
                       </span>
                     )}
                   </div>
-                  <div className="font-mono text-[11px] text-cream-500">
+                  <div className="font-mono text-[11px] text-500">
                     {r.trace_count} trace{r.trace_count > 1 ? "s" : ""}
                   </div>
                 </div>
@@ -178,16 +178,16 @@ export function BlamePage() {
                 </div>
 
                 {model === "v2" && (
-                  <div className="mt-3 pt-3 border-t border-ink-500/30 flex gap-6 font-mono text-[10px] text-cream-500">
+                  <div className="mt-3 pt-3 border-t border-ink-500/30 flex gap-6 font-mono text-[10px] text-500">
                     <span>
-                      std σ <span className="text-cream-100 tabular-nums">{r.avg_blame_score_std?.toFixed(2) ?? "—"}</span>
+                      std σ <span className="text-fg-100 tabular-nums">{r.avg_blame_score_std?.toFixed(2) ?? "—"}</span>
                     </span>
                     <span>
-                      err amp <span className={`tabular-nums ${(r.avg_error_amplification ?? 0) > 0 ? "text-cherry-light" : "text-cream-100"}`}>
+                      err amp <span className={`tabular-nums ${(r.avg_error_amplification ?? 0) > 0 ? "text-cherry-light" : "text-fg-100"}`}>
                         ×{r.avg_error_amplification?.toFixed(2) ?? "—"}
                       </span>
                     </span>
-                    <span className="text-cream-500/70 italic">{r.model_version ?? "v2"}</span>
+                    <span className="text-500 opacity-70 italic">{r.model_version ?? "v2"}</span>
                   </div>
                 )}
               </Link>
@@ -202,12 +202,12 @@ export function BlamePage() {
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div>
-      <span className="text-cream-500 text-[10px] uppercase tracking-wider mr-2">
+      <span className="text-500 text-[10px] uppercase tracking-wider mr-2">
         {label}
       </span>
-      <span className="text-cream-50">{value}</span>
+      <span className="text-white">{value}</span>
       {sub && (
-        <span className="ml-1 text-cream-500 text-[10px]">({sub})</span>
+        <span className="ml-1 text-500 text-[10px]">({sub})</span>
       )}
     </div>
   );

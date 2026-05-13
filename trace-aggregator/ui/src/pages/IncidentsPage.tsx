@@ -55,10 +55,10 @@ export function IncidentsPage() {
         className="mb-10"
       >
         <div className="eyebrow mb-3">incident model</div>
-        <h1 className="font-display text-[64px] leading-[0.95] tracking-tightest text-cream-50">
+        <h1 className="font-display text-[64px] leading-[0.95] tracking-tightest text-white">
           Active <span className="italic text-cherry-light">incidents</span>
         </h1>
-        <p className="mt-4 font-display italic text-[18px] text-cream-300 max-w-xl">
+        <p className="mt-4 font-display italic text-[18px] text-fg-300 max-w-xl">
           What's currently on fire, and what's smouldering. Ack to silence; resolve to close.
         </p>
       </motion.div>
@@ -74,7 +74,7 @@ export function IncidentsPage() {
                 type="button"
                 onClick={() => setTab(t.id)}
                 className={`px-4 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-colors ${
-                  tab === t.id ? "bg-cream-50 text-ink-900" : "text-cream-300 hover:bg-ink-700"
+                  tab === t.id ? "bg-white text-ink-900" : "text-fg-300 hover:bg-ink-700"
                 }`}
               >
                 {t.label} ({n})
@@ -82,7 +82,7 @@ export function IncidentsPage() {
             );
           })}
         </div>
-        <div className="font-mono text-[11px] text-cream-500">
+        <div className="font-mono text-[11px] text-500">
           {loading ? "loading…" : `${items.length} shown`}
         </div>
       </div>
@@ -95,7 +95,7 @@ export function IncidentsPage() {
 
       {!error && !loading && items.length === 0 && (
         <div className="hairline rounded-sm p-12 text-center">
-          <div className="font-display italic text-[20px] text-cream-300 mb-2">
+          <div className="font-display italic text-[20px] text-fg-300 mb-2">
             Nothing on fire.{tab === "open" ? " (Lucky day.)" : ""}
           </div>
         </div>
@@ -116,17 +116,17 @@ export function IncidentsPage() {
                   <span className={`font-mono text-[10px] uppercase tracking-[0.18em] ${stateBadge(inc.state)}`}>
                     {inc.state}
                   </span>
-                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-cream-500">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-500">
                     {inc.alert_type}
                   </span>
-                  <span className="font-mono text-[10px] text-cream-500">
+                  <span className="font-mono text-[10px] text-500">
                     × {inc.occurrence_count}
                   </span>
                 </div>
-                <div className="font-display italic text-[18px] text-cream-50">
+                <div className="font-display italic text-[18px] text-white">
                   {inc.message}
                 </div>
-                <div className="mt-2 font-mono text-[11px] text-cream-500 flex gap-4 flex-wrap">
+                <div className="mt-2 font-mono text-[11px] text-500 flex gap-4 flex-wrap">
                   <span>opened {fmtAgo(inc.opened_at)}</span>
                   <span>last seen {fmtAgo(inc.last_seen_at)}</span>
                   {inc.acknowledged_at && <span>ack'd {fmtAgo(inc.acknowledged_at)}</span>}
@@ -139,7 +139,7 @@ export function IncidentsPage() {
                     <button
                       type="button"
                       onClick={() => onAck(inc.incident_key)}
-                      className="hairline rounded-sm px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-cream-300 hover:bg-ink-700 transition-colors"
+                      className="hairline rounded-sm px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-fg-300 hover:bg-ink-700 transition-colors"
                     >
                       ack
                     </button>
@@ -154,7 +154,7 @@ export function IncidentsPage() {
                 </div>
               )}
             </div>
-            <div className="font-mono text-[10px] text-cream-500/70 truncate">
+            <div className="font-mono text-[10px] text-500 opacity-70 truncate">
               key: {inc.incident_key}
             </div>
           </motion.div>
@@ -167,7 +167,7 @@ export function IncidentsPage() {
 function severityBorder(sev: string): string {
   if (sev === "high") return "border-l-cherry";
   if (sev === "medium") return "border-l-amber";
-  return "border-l-cream-500";
+  return "border-l-fg-500";
 }
 
 function stateBadge(state: string): string {

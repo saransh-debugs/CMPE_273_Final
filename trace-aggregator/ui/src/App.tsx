@@ -21,10 +21,10 @@ export default function App() {
       </main>
       <footer className="hairline-t mt-20">
         <div className="max-w-[1400px] mx-auto px-8 py-6 flex justify-between items-center">
-          <div className="font-mono text-[10px] text-cream-500 uppercase tracking-[0.2em]">
+          <div className="font-mono text-[10px] text-500 uppercase tracking-[0.2em]">
             distributed trace aggregator
           </div>
-          <div className="font-display italic text-[13px] text-cream-500">
+          <div className="font-display italic text-[13px] text-500">
             built for the multi-agent era
           </div>
         </div>

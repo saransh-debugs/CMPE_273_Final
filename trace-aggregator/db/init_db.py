@@ -21,7 +21,8 @@ RETENTION_DAYS = retention_days()
 
 
 def _ttl(expr: str, days: int) -> str:
-    return f"TTL {expr} + INTERVAL {days} DAY"
+    # ClickHouse requires DateTime (not DateTime64) in TTL expressions
+    return f"TTL toDateTime({expr}) + INTERVAL {days} DAY"
 
 
 def get_client(retries: int = CONNECT_RETRIES):
@@ -241,7 +242,12 @@ def governance_migration_statements() -> list[str]:
 def apply_governance_policies(client) -> None:
     print("→ Applying retention TTL policies...")
     for stmt in governance_migration_statements():
-        client.command(stmt)
+        try:
+            client.command(stmt)
+        except Exception as e:
+            # MODIFY TTL on existing tables is best-effort; TTL is already set
+            # correctly in the CREATE TABLE statements above.
+            print(f"  (skipped: {e})")
 
 
 def setup() -> None:

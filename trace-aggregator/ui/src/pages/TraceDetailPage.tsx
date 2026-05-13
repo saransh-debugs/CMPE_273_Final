@@ -2,27 +2,31 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { api } from "../api";
-import type { TraceDetail, RootCauseEdge } from "../types";
-import { fmtMs, fmtTokens, shortId } from "../utils/format";
+import type { TraceDetail, RootCauseEdge, RawSpan } from "../types";
+import { fmtMs, fmtTokens, parseInputText, shortId } from "../utils/format";
 import { StatTile } from "../components/StatTile";
 import { TimelineWaterfall } from "../components/TimelineWaterfall";
 import { DAGView } from "../components/DAGView";
 import { BlamePanel } from "../components/BlamePanel";
 import { DecisionPanel } from "../components/DecisionPanel";
+import { PipelineOutputPanel } from "../components/PipelineOutputPanel";
 
 export function TraceDetailPage() {
   const { id = "" } = useParams();
   const [data, setData] = useState<TraceDetail | null>(null);
   const [rootCause, setRootCause] = useState<RootCauseEdge[]>([]);
+  const [spans, setSpans] = useState<RawSpan[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
 
   useEffect(() => {
     setData(null);
     setRootCause([]);
+    setSpans([]);
     setError(null);
     api.getTrace(id).then(setData).catch((e) => setError(String(e)));
     api.getRootCause(id).then(setRootCause).catch(() => setRootCause([]));
+    api.getSpans(id).then(setSpans).catch(() => setSpans([]));
   }, [id]);
 
   if (error) {
@@ -30,7 +34,7 @@ export function TraceDetailPage() {
       <div className="max-w-[1400px] mx-auto px-8 py-12">
         <Link
           to="/"
-          className="font-mono text-[11px] uppercase tracking-wider text-cream-500 hover:text-cream-100"
+          className="font-mono text-[11px] uppercase tracking-wider text-500 hover:text-fg-100"
         >
           ← back to traces
         </Link>
@@ -44,7 +48,7 @@ export function TraceDetailPage() {
   if (!data) {
     return (
       <div className="max-w-[1400px] mx-auto px-8 py-12">
-        <div className="font-mono text-[12px] text-cream-500 animate-pulse">
+        <div className="font-mono text-[12px] text-500 animate-pulse">
           Loading trace…
         </div>
       </div>
@@ -55,7 +59,7 @@ export function TraceDetailPage() {
     <div className="max-w-[1400px] mx-auto px-8 py-10">
       <Link
         to="/"
-        className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-cream-500 hover:text-cream-100 transition-colors mb-6"
+        className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-500 hover:text-fg-100 transition-colors mb-6"
       >
         ← back to traces
       </Link>
@@ -69,13 +73,18 @@ export function TraceDetailPage() {
       >
         <div>
           <div className="eyebrow mb-2">trace</div>
-          <h1 className="font-display text-[42px] leading-none tracking-tightest text-cream-50 mb-2">
+          <h1 className="font-display text-[42px] leading-none tracking-tightest text-white mb-2">
             <span className="italic">execution</span>{" "}
-            <span className="font-mono text-[28px] text-cream-300">
+            <span className="font-mono text-[28px] text-fg-300">
               {shortId(data.trace_id)}
             </span>
           </h1>
-          <div className="font-mono text-[11px] text-cream-500">{data.trace_id}</div>
+          <div className="font-mono text-[11px] text-500">{data.trace_id}</div>
+          {parseInputText(data.input_text) && (
+            <div className="mt-3 font-display italic text-[18px] text-fg-300 max-w-2xl">
+              "{parseInputText(data.input_text)}"
+            </div>
+          )}
         </div>
 
         {data.error_count > 0 && (
@@ -155,6 +164,15 @@ export function TraceDetailPage() {
               onSpanSelect={setSelectedSpanId}
             />
           </Panel>
+
+          {/* Pipeline output panel */}
+          <Panel
+            eyebrow="pipeline output"
+            title="Outputs"
+            subtitle="Content produced by each agent during this trace."
+          >
+            <PipelineOutputPanel spans={spans} />
+          </Panel>
         </div>
 
         <div>
@@ -192,12 +210,12 @@ function Panel({
       <header className="mb-5 flex items-baseline justify-between gap-4">
         <div>
           <div className="eyebrow mb-1">{eyebrow}</div>
-          <h2 className="font-display italic text-[24px] leading-none tracking-tighter text-cream-50">
+          <h2 className="font-display italic text-[24px] leading-none tracking-tighter text-white">
             {title}
           </h2>
         </div>
         {subtitle && (
-          <div className="font-mono text-[11px] text-cream-500 text-right max-w-[300px]">
+          <div className="font-mono text-[11px] text-500 text-right max-w-[300px]">
             {subtitle}
           </div>
         )}

@@ -9,7 +9,7 @@ export function BlamePanel({ rows }: Props) {
   const sorted = [...rows].sort((a, b) => b.blame_score - a.blame_score);
   if (sorted.length === 0) {
     return (
-      <div className="text-cream-500 italic font-display">No blame data yet.</div>
+      <div className="text-500 italic font-display">No blame data yet.</div>
     );
   }
   const maxScore = Math.max(...sorted.map((r) => r.blame_score), 1);
@@ -28,14 +28,14 @@ export function BlamePanel({ rows }: Props) {
           >
             <div className="flex items-baseline justify-between mb-3">
               <div className="flex items-baseline gap-3">
-                <span className="font-mono text-[10px] text-cream-500 tabular-nums">
+                <span className="font-mono text-[10px] text-500 tabular-nums">
                   {String(i + 1).padStart(2, "0")}
                 </span>
                 <span
                   className="inline-block w-2 h-2 rounded-full"
                   style={{ background: c }}
                 />
-                <span className="font-mono text-cream-50 text-[14px]">
+                <span className="font-mono text-white text-[14px]">
                   {r.agent_id}
                 </span>
                 {r.error_count > 0 && (
@@ -51,7 +51,7 @@ export function BlamePanel({ rows }: Props) {
                 >
                   {r.blame_score.toFixed(1)}
                 </span>
-                <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-cream-500">
+                <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-500">
                   {tone.label}
                 </span>
               </div>
@@ -96,17 +96,17 @@ function Stat({
 }) {
   return (
     <div>
-      <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-cream-500 mb-1">
+      <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-500 mb-1">
         {label}
       </div>
       <div
         className={`font-mono text-[13px] tabular-nums ${
-          alert ? "text-cherry-light" : "text-cream-50"
+          alert ? "text-cherry-light" : "text-white"
         }`}
       >
         {value}
         {share !== undefined && (
-          <span className="text-cream-500 text-[10px] ml-1.5">
+          <span className="text-500 text-[10px] ml-1.5">
             {share.toFixed(0)}%
           </span>
         )}

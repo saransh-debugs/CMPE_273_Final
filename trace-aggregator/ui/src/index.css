@@ -2,13 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Muted body copy — name only; value from `theme.colors.fg.500` (tailwind.config.js) */
+@layer utilities {
+  .text-500 {
+  }
+}
+
 @layer base {
   html, body, #root {
     height: 100%;
   }
 
   body {
-    @apply bg-ink-900 text-cream-50 font-sans antialiased;
+    @apply bg-ink-900 text-white font-sans font-medium antialiased;
     /* Subtle film-grain via radial noise — gives the page atmosphere */
     background-image:
       radial-gradient(circle at 20% 0%, rgba(199, 62, 29, 0.04) 0%, transparent 40%),
@@ -17,7 +23,7 @@
   }
 
   ::selection {
-    @apply bg-cherry/30 text-cream-50;
+    @apply bg-cherry/30 text-white;
   }
 
   /* Custom scrollbar — keeps the editorial feel */
@@ -32,7 +38,8 @@
     @apply bg-ink-500 rounded-full;
   }
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-cream-700;
+    /* theme() avoids JIT-only utilities that never appear in *.tsx content */
+    background-color: theme("colors.fg.700");
   }
 }
 
@@ -50,11 +57,11 @@
 
   /* Pill / tag */
   .tag {
-    @apply inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-mono uppercase tracking-tighter text-cream-300 hairline rounded-full;
+    @apply inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-mono uppercase tracking-tighter text-fg-300 hairline rounded-full;
   }
 
   /* Eyebrow text — small caps label above section headers */
   .eyebrow {
-    @apply text-[11px] font-mono uppercase tracking-[0.18em] text-cream-500;
+    @apply text-[11px] font-mono uppercase tracking-[0.18em] text-500;
   }
 }

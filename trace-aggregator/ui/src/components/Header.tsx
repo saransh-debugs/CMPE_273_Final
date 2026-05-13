@@ -14,10 +14,10 @@ export function Header() {
         {/* Wordmark — serif italic, the design's signature */}
         <NavLink to="/" className="group flex items-baseline gap-3">
           <div className="w-1.5 h-1.5 rounded-full bg-cherry transition-all group-hover:scale-150" />
-          <span className="font-display italic text-[22px] leading-none tracking-tighter text-cream-50">
+          <span className="font-display italic text-[22px] leading-none tracking-tighter text-white">
             Trace Aggregator
           </span>
-          <span className="hidden md:inline font-mono text-[10px] uppercase tracking-[0.2em] text-cream-500 ml-2">
+          <span className="hidden md:inline font-mono text-[10px] uppercase tracking-[0.2em] text-500 ml-2">
             v0.1 — multi-agent observability
           </span>
         </NavLink>
@@ -31,8 +31,8 @@ export function Header() {
               className={({ isActive }) =>
                 `px-3 py-1.5 text-[13px] font-mono uppercase tracking-wider rounded-sm transition-colors ` +
                 (isActive
-                  ? "text-cream-50 bg-ink-600"
-                  : "text-cream-300 hover:text-cream-50 hover:bg-ink-700")
+                  ? "text-white bg-ink-600"
+                  : "text-fg-300 hover:text-white hover:bg-ink-700")
               }
             >
               {l.label}

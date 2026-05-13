@@ -35,7 +35,7 @@ export function DAGView({ nodes, selectedSpanId, onSpanSelect }: Props) {
         />
       ))}
       {roots.length === 0 && (
-        <div className="text-cream-500 italic font-display">No root spans found.</div>
+        <div className="text-500 italic font-display">No root spans found.</div>
       )}
     </div>
   );
@@ -83,9 +83,12 @@ function TreeNode({
           className="inline-block w-2 h-2 rounded-full mr-2 shrink-0"
           style={{ background: c }}
         />
-        <span className="text-cream-50">{node.agent_id}</span>
+        <span className="text-white">{node.agent_id}</span>
+        <span className="ml-2 text-[10px] tracking-tighter text-ink-500 font-mono">
+          {node.event_type}
+        </span>
         {isError && (
-          <span className="ml-2 text-[10px] uppercase tracking-tighter text-cherry">
+          <span className="ml-1 text-[10px] uppercase tracking-tighter text-cherry">
             error
           </span>
         )}
@@ -94,7 +97,7 @@ function TreeNode({
             inferred
           </span>
         )}
-        <span className="ml-auto text-cream-500 group-hover:text-cream-300 flex gap-3">
+        <span className="ml-auto text-500 group-hover:text-fg-300 flex gap-3">
           <span>{fmtMs(node.latency_ms)}</span>
           <span>
             {node.input_tokens + node.output_tokens > 0

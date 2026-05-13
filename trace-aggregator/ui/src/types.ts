@@ -9,6 +9,7 @@ export interface TraceSummary {
   total_output_tokens: number;
   error_count: number;
   reconstructed_at: string;
+  input_text?: string;
 }
 
 export interface DAGNode {
@@ -23,6 +24,7 @@ export interface DAGNode {
   input_tokens: number;
   output_tokens: number;
   start_time_ms: number;
+  metadata?: string;
 }
 
 export interface AgentBlame {
@@ -49,6 +51,7 @@ export interface TraceDetail {
   decisions: DecisionEvent[];
   decision_count: number;
   reconstructed_at: string;
+  input_text?: string;
 }
 
 export interface RawSpan {

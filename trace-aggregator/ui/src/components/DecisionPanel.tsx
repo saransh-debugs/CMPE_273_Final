@@ -14,7 +14,7 @@ export function DecisionPanel({ decisions, rootCause, selectedSpanId, onSpanSele
 
   if (decisions.length === 0 && rootCause.length === 0) {
     return (
-      <div className="text-cream-500 italic font-display text-[14px]">
+      <div className="text-500 italic font-display text-[14px]">
         No decision events recorded for this trace.
       </div>
     );
@@ -31,8 +31,8 @@ export function DecisionPanel({ decisions, rootCause, selectedSpanId, onSpanSele
             onClick={() => setTab(t)}
             className={`px-4 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-colors ${
               tab === t
-                ? "bg-cream-50 text-ink-900"
-                : "text-cream-300 hover:bg-ink-700"
+                ? "bg-white text-ink-900"
+                : "text-fg-300 hover:bg-ink-700"
             }`}
           >
             {t === "decisions"
@@ -58,7 +58,7 @@ export function DecisionPanel({ decisions, rootCause, selectedSpanId, onSpanSele
       {tab === "root-cause" && (
         <div className="space-y-3">
           {rootCause.length === 0 ? (
-            <div className="text-cream-500 italic font-display text-[14px]">
+            <div className="text-500 italic font-display text-[14px]">
               No impact edges computed yet.
             </div>
           ) : (
@@ -106,16 +106,16 @@ function DecisionCard({
               className="inline-block w-2 h-2 rounded-full shrink-0"
               style={{ background: c }}
             />
-            <span className="font-mono text-[13px] text-cream-50">
+            <span className="font-mono text-[13px] text-white">
               {d.actor_agent_id}
             </span>
-            <span className="font-mono text-[10px] uppercase tracking-wider text-cream-500 hairline px-2 py-0.5 rounded-full">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-500 hairline px-2 py-0.5 rounded-full">
               {d.decision_type}
             </span>
           </div>
           <div className="flex items-center gap-4 shrink-0">
             <ConfidencePip pct={confidencePct} />
-            <span className="font-mono text-[10px] text-cream-500">
+            <span className="font-mono text-[10px] text-500">
               {open ? "▲" : "▼"}
             </span>
           </div>
@@ -123,7 +123,7 @@ function DecisionCard({
 
         {/* Rationale preview */}
         {d.rationale_summary && (
-          <div className="mt-1.5 font-display italic text-[13px] text-cream-300 leading-snug line-clamp-1">
+          <div className="mt-1.5 font-display italic text-[13px] text-fg-300 leading-snug line-clamp-1">
             "{d.rationale_summary}"
           </div>
         )}
@@ -136,7 +136,7 @@ function DecisionCard({
           {d.rationale_summary && (
             <div>
               <div className="eyebrow mb-1">rationale</div>
-              <div className="font-display italic text-[14px] text-cream-100 leading-relaxed">
+              <div className="font-display italic text-[14px] text-fg-100 leading-relaxed">
                 "{d.rationale_summary}"
               </div>
             </div>
@@ -159,7 +159,7 @@ function DecisionCard({
                       }`}
                     >
                       <div className="flex items-center justify-between mb-1">
-                        <span className="font-mono text-[12px] text-cream-50">
+                        <span className="font-mono text-[12px] text-white">
                           {cand.description || cand.reason || cand.candidate_id}
                         </span>
                         <div className="flex items-center gap-2">
@@ -168,7 +168,7 @@ function DecisionCard({
                               selected
                             </span>
                           )}
-                          <span className="font-mono text-[11px] text-cream-300 tabular-nums">
+                          <span className="font-mono text-[11px] text-fg-300 tabular-nums">
                             {(cand.score * 100).toFixed(0)}%
                           </span>
                         </div>
@@ -181,7 +181,7 @@ function DecisionCard({
                                 pros
                               </div>
                               {cand.pros!.map((p, i) => (
-                                <div key={i} className="font-mono text-[10px] text-cream-300">
+                                <div key={i} className="font-mono text-[10px] text-fg-300">
                                   + {p}
                                 </div>
                               ))}
@@ -193,7 +193,7 @@ function DecisionCard({
                                 cons
                               </div>
                               {cand.cons!.map((c, i) => (
-                                <div key={i} className="font-mono text-[10px] text-cream-300">
+                                <div key={i} className="font-mono text-[10px] text-fg-300">
                                   − {c}
                                 </div>
                               ))}
@@ -221,11 +221,11 @@ function DecisionCard({
           )}
 
           {/* Footer meta */}
-          <div className="flex gap-6 font-mono text-[10px] text-cream-500 pt-1 border-t border-ink-500/30 items-center">
+          <div className="flex gap-6 font-mono text-[10px] text-500 pt-1 border-t border-ink-500/30 items-center">
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); onSpanSelect?.(isSpanSelected ? null : d.source_span_id); }}
-              className={`hover:text-cream-100 transition-colors ${isSpanSelected ? "text-cherry-light" : ""}`}
+              className={`hover:text-fg-100 transition-colors ${isSpanSelected ? "text-cherry-light" : ""}`}
             >
               ↗ span {shortId(d.source_span_id)}
             </button>
@@ -257,7 +257,7 @@ function RootCauseCard({
     <div className={`hairline rounded-sm bg-ink-700/40 p-4 ${isSpanSelected ? "border-cherry/60 ring-1 ring-cherry/30" : ""}`}>
       <div className="flex items-start justify-between gap-4 mb-3">
         <div className="flex items-center gap-3">
-          <span className="font-mono text-[10px] text-cream-500 tabular-nums w-5">
+          <span className="font-mono text-[10px] text-500 tabular-nums w-5">
             {String(rank).padStart(2, "0")}
           </span>
           <span
@@ -266,10 +266,10 @@ function RootCauseCard({
           />
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-mono text-[13px] text-cream-50">
+              <span className="font-mono text-[13px] text-white">
                 {edge.actor_agent_id}
               </span>
-              <span className="font-mono text-[10px] uppercase tracking-wider text-cream-500 hairline px-2 py-0.5 rounded-full">
+              <span className="font-mono text-[10px] uppercase tracking-wider text-500 hairline px-2 py-0.5 rounded-full">
                 {edge.decision_type}
               </span>
               {hasErrors && (
@@ -279,7 +279,7 @@ function RootCauseCard({
               )}
             </div>
             {edge.rationale_summary && (
-              <div className="mt-0.5 font-display italic text-[12px] text-cream-400">
+              <div className="mt-0.5 font-display italic text-[12px] text-fg-400">
                 "{edge.rationale_summary}"
               </div>
             )}
@@ -307,11 +307,11 @@ function RootCauseCard({
         />
       </div>
 
-      <div className="mt-3 flex gap-6 font-mono text-[10px] text-cream-500 border-t border-ink-500/30 pt-2 items-center">
+      <div className="mt-3 flex gap-6 font-mono text-[10px] text-500 border-t border-ink-500/30 pt-2 items-center">
         <button
           type="button"
           onClick={() => onSpanSelect?.(isSpanSelected ? null : edge.source_span_id)}
-          className={`hover:text-cream-100 transition-colors ${isSpanSelected ? "text-cherry-light" : ""}`}
+          className={`hover:text-fg-100 transition-colors ${isSpanSelected ? "text-cherry-light" : ""}`}
         >
           ↗ src {shortId(edge.source_span_id)}
         </button>
@@ -351,12 +351,12 @@ function ImpactStat({
 }) {
   return (
     <div>
-      <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-cream-500 mb-0.5">
+      <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-500 mb-0.5">
         {label}
       </div>
       <div
         className={`font-mono text-[13px] tabular-nums ${
-          hot ? "text-cherry-light" : "text-cream-50"
+          hot ? "text-cherry-light" : "text-white"
         }`}
       >
         {value}

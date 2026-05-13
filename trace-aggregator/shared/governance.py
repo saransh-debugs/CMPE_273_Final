@@ -43,6 +43,7 @@ DEFAULT_METADATA_ALLOWLIST = {
     "note",
     "notes",
     "operation",
+    "output",
     "output_state_keys",
     "parse_error_reason",
     "parse_failure_reason",

@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Tuple
 from pydantic import BaseModel, Field, ValidationError
 
 from generated import tracing_pb2
-from shared.governance import add_redact_key, normalize_metadata_payload, redact_sensitive
+from shared.governance import _REDACT_PATTERNS, add_redact_key, normalize_metadata_payload, redact_sensitive
 from shared.trace_auth import DEFAULT_TENANT_ID
 
 METADATA_CHAR_LIMIT = 4_000
@@ -376,6 +376,13 @@ def build_span(
         meta["input_state_keys"] = list(user_state.keys())
         if isinstance(result, dict):
             meta["output_state_keys"] = [k for k in result if not str(k).startswith("_")]
+            output_vals = {
+                k: truncate_text(str(v), 2000)
+                for k, v in result.items()
+                if not str(k).startswith("_") and isinstance(v, str) and v
+            }
+            if output_vals:
+                meta["output"] = output_vals
 
     input_text = state.get(INPUT_TEXT_KEY)
     if input_text:

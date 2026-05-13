@@ -47,7 +47,7 @@ export function TimelineWaterfall({ nodes, selectedSpanId, onSpanSelect }: Props
 
   if (rows.length === 0) {
     return (
-      <div className="text-cream-500 italic font-display p-8">
+      <div className="text-500 italic font-display p-8">
         No spans recorded for this trace.
       </div>
     );
@@ -146,6 +146,7 @@ export function TimelineWaterfall({ nodes, selectedSpanId, onSpanSelect }: Props
                 textAnchor="end"
               >
                 {n.agent_id}
+                <tspan fill="#6B6760" fontSize="9" dx="4">{n.event_type}</tspan>
               </text>
               {/* Vector clock height marker — small dot */}
               <circle
@@ -236,7 +237,7 @@ export function TimelineWaterfall({ nodes, selectedSpanId, onSpanSelect }: Props
                 parent inferred via vector clock
               </div>
             )}
-            <div className="mt-2 text-[10px] text-cream-500">
+            <div className="mt-2 text-[10px] text-500">
               vc: {Object.entries(n.vector_clock).map(([k, v]) => `${k}=${v}`).join("  ")}
             </div>
           </div>
@@ -249,8 +250,8 @@ export function TimelineWaterfall({ nodes, selectedSpanId, onSpanSelect }: Props
 function Row({ k, v, accent }: { k: string; v: string; accent?: boolean }) {
   return (
     <div className="flex justify-between gap-3 py-0.5">
-      <span className="text-cream-500">{k}</span>
-      <span className={accent ? "text-cherry-light" : "text-cream-100"}>{v}</span>
+      <span className="text-500">{k}</span>
+      <span className={accent ? "text-cherry-light" : "text-fg-100"}>{v}</span>
     </div>
   );
 }
