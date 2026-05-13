@@ -31,6 +31,10 @@ _logger = logging.getLogger("slo.evaluator")
 COLLECTOR_METRICS_URL = os.environ.get("COLLECTOR_METRICS_URL", "http://localhost:9090/metrics")
 API_PROBE_URL = os.environ.get("API_PROBE_URL", "http://localhost:8000")
 API_PROBE_SAMPLES = int(os.environ.get("API_PROBE_SAMPLES", "5"))
+CLICKHOUSE_HOST = os.environ.get("CLICKHOUSE_HOST", "localhost")
+CLICKHOUSE_PORT = int(os.environ.get("CLICKHOUSE_PORT", "8123"))
+CLICKHOUSE_USER = os.environ.get("CLICKHOUSE_USER", "default")
+CLICKHOUSE_PASSWORD = os.environ.get("CLICKHOUSE_PASSWORD", "")
 # Traces counted toward reconstruction SLO must have spans this fresh (typically
 # tighter than engine.worker LOOKBACK_SEC so old backlog traces do not dominate p95).
 RECON_LAG_ACTIVE_SEC = int(os.environ.get("SLO_RECON_ACTIVE_LOOKBACK_SEC", "120"))
@@ -57,7 +61,7 @@ class SLOStatus:
 
 
 def _client():
-    return clickhouse_connect.get_client(host="localhost", port=8123, username="default", password="")
+    return clickhouse_connect.get_client(host=CLICKHOUSE_HOST, port=CLICKHOUSE_PORT, username=CLICKHOUSE_USER, password=CLICKHOUSE_PASSWORD)
 
 
 def _percentile(values: List[float], p: float) -> float:

@@ -68,8 +68,7 @@ def _require_tenant(request: Request) -> str:
 
 
 def _tenant_clause(tenant_id: str, clauses: list[str], params: dict) -> None:
-    clauses.append("tenant_id = {tenant_id:String}")
-    params["tenant_id"] = tenant_id
+    clauses.append(f"tenant_id = '{tenant_id}'")
 
 
 @app.get("/health")
@@ -167,20 +166,15 @@ def list_traces(
     if hours is not None:
         outer_clauses.append(f"latest_reconstructed_at >= now() - INTERVAL {int(hours)} HOUR")
     if start_time is not None:
-        outer_clauses.append("latest_reconstructed_at >= {start_time:DateTime64(3)}")
-        params["start_time"] = start_time
+        outer_clauses.append(f"latest_reconstructed_at >= '{start_time}'")
     if end_time is not None:
-        outer_clauses.append("latest_reconstructed_at <= {end_time:DateTime64(3)}")
-        params["end_time"] = end_time
+        outer_clauses.append(f"latest_reconstructed_at <= '{end_time}'")
 
     # Cursor: compound comparison for stable keyset pagination
     if parsed_cursor is not None:
         outer_clauses.append(
-            "(latest_reconstructed_at, trace_id) < "
-            "({cursor_ts:DateTime64(3)}, {cursor_trace_id:String})"
+            f"(latest_reconstructed_at, trace_id) < ('{parsed_cursor.ts}', '{parsed_cursor.trace_id}')"
         )
-        params["cursor_ts"] = parsed_cursor.ts
-        params["cursor_trace_id"] = parsed_cursor.trace_id
 
     # Errors
     if has_errors is True:
@@ -190,38 +184,30 @@ def list_traces(
 
     # Token range
     if min_tokens is not None:
-        outer_clauses.append("(total_input_tokens + total_output_tokens) >= {min_tokens:UInt64}")
-        params["min_tokens"] = min_tokens
+        outer_clauses.append(f"(total_input_tokens + total_output_tokens) >= {int(min_tokens)}")
     if max_tokens is not None:
-        outer_clauses.append("(total_input_tokens + total_output_tokens) <= {max_tokens:UInt64}")
-        params["max_tokens"] = max_tokens
+        outer_clauses.append(f"(total_input_tokens + total_output_tokens) <= {int(max_tokens)}")
 
     # Latency
     if min_latency_ms is not None:
-        outer_clauses.append("total_latency_ms >= {min_latency_ms:UInt64}")
-        params["min_latency_ms"] = min_latency_ms
+        outer_clauses.append(f"total_latency_ms >= {int(min_latency_ms)}")
     if max_latency_ms is not None:
-        outer_clauses.append("total_latency_ms <= {max_latency_ms:UInt64}")
-        params["max_latency_ms"] = max_latency_ms
+        outer_clauses.append(f"total_latency_ms <= {int(max_latency_ms)}")
 
     # Span-level filters
     span_subquery_clauses: list[str] = []
     if agent_id is not None:
-        span_subquery_clauses.append("agent_id = {agent_id:String}")
-        params["agent_id"] = agent_id
+        span_subquery_clauses.append(f"agent_id = '{agent_id}'")
     if event_type is not None:
-        span_subquery_clauses.append("event_type = {event_type:String}")
-        params["event_type"] = event_type
+        span_subquery_clauses.append(f"event_type = '{event_type}'")
     if metadata_key is not None and metadata_value is not None:
         span_subquery_clauses.append(
-            "JSONExtractString(metadata, {metadata_key:String}) = {metadata_value:String}"
+            f"JSONExtractString(metadata, '{metadata_key}') = '{metadata_value}'"
         )
-        params["metadata_key"] = metadata_key
-        params["metadata_value"] = metadata_value
     if span_subquery_clauses:
         outer_clauses.append(f"""trace_id IN (
             SELECT DISTINCT trace_id FROM tracing.raw_spans
-            WHERE tenant_id = {tenant_id:String} AND {" AND ".join(span_subquery_clauses)}
+            WHERE tenant_id = '{tenant_id}' AND {" AND ".join(span_subquery_clauses)}
         )""")
 
     where_sql = ("WHERE " + " AND ".join(outer_clauses)) if outer_clauses else ""
@@ -230,8 +216,6 @@ def list_traces(
     # Fetch limit+1 to detect has_more without a second query
     # ────────────────────────────────────────────────────────────────────
     fetch_size = limit + 1
-    params["fetch_size"] = fetch_size
-    params["offset"] = offset
 
     # ORDER BY must match the cursor's compound key exactly
     rows = _client().query(
@@ -256,9 +240,8 @@ def list_traces(
         )
         {where_sql}
         ORDER BY latest_reconstructed_at DESC, trace_id DESC
-        LIMIT {{fetch_size:UInt32}} OFFSET {{offset:UInt32}}
-        """,
-        parameters=params,
+        LIMIT {fetch_size} OFFSET {offset}
+        """
     ).result_rows
 
     # ────────────────────────────────────────────────────────────────────
@@ -991,7 +974,7 @@ def aggregate_blame(
     rows = client.query(f"""
         SELECT {column}
         FROM tracing.reconstructed_traces
-                WHERE tenant_id = {tenant_id:String}
+                WHERE tenant_id = '{tenant_id}'
                     AND reconstructed_at >= now() - INTERVAL {hours} HOUR
     """).result_rows
 

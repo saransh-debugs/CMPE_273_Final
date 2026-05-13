@@ -20,10 +20,14 @@ from .evaluator import SLOStatus, evaluate_all
 
 _logger = logging.getLogger("slo.worker")
 POLL_INTERVAL_SEC = float(os.environ.get("SLO_POLL_INTERVAL_SEC", "60"))
+CLICKHOUSE_HOST = os.environ.get("CLICKHOUSE_HOST", "localhost")
+CLICKHOUSE_PORT = int(os.environ.get("CLICKHOUSE_PORT", "8123"))
+CLICKHOUSE_USER = os.environ.get("CLICKHOUSE_USER", "default")
+CLICKHOUSE_PASSWORD = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
 
 def _connect():
-    return clickhouse_connect.get_client(host="localhost", port=8123, username="default", password="")
+    return clickhouse_connect.get_client(host=CLICKHOUSE_HOST, port=CLICKHOUSE_PORT, username=CLICKHOUSE_USER, password=CLICKHOUSE_PASSWORD)
 
 
 def _persist(client, statuses: List[SLOStatus]) -> None:

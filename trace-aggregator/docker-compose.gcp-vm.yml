@@ -93,6 +93,8 @@ services:
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: ""
       TRACE_CORS_ORIGINS: "*"
+      COLLECTOR_METRICS_URL: http://collector:9090/metrics
+      API_PROBE_URL: http://localhost:8080
 
   ui:
     build:
@@ -105,6 +107,27 @@ services:
         condition: service_started
     ports:
       - "80:8080"
+
+  slo:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      collector:
+        condition: service_started
+    command: ["python", "-m", "slo.worker"]
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      COLLECTOR_METRICS_URL: http://collector:9090/metrics
+      API_PROBE_URL: http://api:8080
+      SLO_POLL_INTERVAL_SEC: 60
 
 volumes:
   clickhouse_data:
