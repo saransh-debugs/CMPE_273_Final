@@ -37,6 +37,18 @@ export function fmtDateTime(iso: string): string {
   }).format(d);
 }
 
+// Parse the nested input_text JSON blob the SDK stores on traces.
+// Returns the human-readable task string, or empty string if absent.
+export function parseInputText(raw: string | undefined): string {
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw);
+    return (parsed.input_text as string) || "";
+  } catch {
+    return raw;
+  }
+}
+
 // Stable color per agent name. Picks from our palette so it stays on-brand.
 const AGENT_PALETTE = [
   "#C73E1D", // cherry

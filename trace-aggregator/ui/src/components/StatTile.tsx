@@ -11,7 +11,7 @@ export function StatTile({ label, value, unit, tone = "default" }: Props) {
       ? "text-cherry-light"
       : tone === "warn"
       ? "text-amber"
-      : "text-cream-50";
+      : "text-white";
 
   return (
     <div className="hairline rounded-sm p-5 bg-ink-700/40">
@@ -21,7 +21,7 @@ export function StatTile({ label, value, unit, tone = "default" }: Props) {
           {value}
         </span>
         {unit && (
-          <span className="font-mono text-[11px] text-cream-500 uppercase">{unit}</span>
+          <span className="font-mono text-[11px] text-500 uppercase">{unit}</span>
         )}
       </div>
     </div>

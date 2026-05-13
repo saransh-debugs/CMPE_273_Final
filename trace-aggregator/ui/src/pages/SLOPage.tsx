@@ -57,10 +57,10 @@ export function SLOPage() {
         className="mb-12"
       >
         <div className="eyebrow mb-3">reliability budget</div>
-        <h1 className="font-display text-[64px] leading-[0.95] tracking-tightest text-cream-50">
+        <h1 className="font-display text-[64px] leading-[0.95] tracking-tightest text-white">
           The <span className="italic text-cherry-light">SLO</span> ledger
         </h1>
-        <p className="mt-4 font-display italic text-[18px] text-cream-300 max-w-xl">
+        <p className="mt-4 font-display italic text-[18px] text-fg-300 max-w-xl">
           Promises we make about ingest, reconstruction, and query — measured live.
         </p>
       </motion.div>
@@ -72,7 +72,7 @@ export function SLOPage() {
       )}
 
       {!error && loading && (
-        <div className="font-mono text-[12px] text-cream-500">loading…</div>
+        <div className="font-mono text-[12px] text-500">loading…</div>
       )}
 
       {!error && data && (
@@ -90,13 +90,13 @@ export function SLOPage() {
               <span className="eyebrow">overall</span>
               <span
                 className={`font-display italic text-[28px] tracking-tighter ${
-                  data.overall === "fail" ? "text-cherry-light" : "text-cream-50"
+                  data.overall === "fail" ? "text-cherry-light" : "text-white"
                 }`}
               >
                 {data.overall.toUpperCase()}
               </span>
             </div>
-            <div className="font-mono text-[11px] text-cream-500">
+            <div className="font-mono text-[11px] text-500">
               {data.statuses.length} SLOs evaluated
             </div>
           </div>
@@ -116,18 +116,18 @@ export function SLOPage() {
                 >
                   <div className="flex items-start justify-between mb-3">
                     <div>
-                      <div className="font-display text-[22px] italic tracking-tighter text-cream-50">
+                      <div className="font-display text-[22px] italic tracking-tighter text-white">
                         {s.title}
                       </div>
-                      <div className="font-mono text-[11px] text-cream-500 mt-1">
+                      <div className="font-mono text-[11px] text-500 mt-1">
                         {s.name} · window={s.window_minutes}m · samples={s.sample_count}
                       </div>
                     </div>
                     <span
                       className={`font-mono text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-sm ${
                         s.passing
-                          ? "bg-sage-900/60 text-cream-50"
-                          : "bg-cherry text-cream-50"
+                          ? "bg-sage-900/60 text-white"
+                          : "bg-cherry text-white"
                       }`}
                     >
                       {s.passing ? "pass" : "fail"}
@@ -136,28 +136,28 @@ export function SLOPage() {
 
                   <div className="grid grid-cols-3 gap-6 font-mono text-[13px] tabular-nums">
                     <div>
-                      <span className="text-cream-500 text-[10px] uppercase tracking-wider mr-2">
+                      <span className="text-500 text-[10px] uppercase tracking-wider mr-2">
                         value
                       </span>
                       <span
                         className={
-                          s.passing ? "text-cream-50" : "text-cherry-light"
+                          s.passing ? "text-white" : "text-cherry-light"
                         }
                       >
                         {formatValue(s)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-cream-500 text-[10px] uppercase tracking-wider mr-2">
+                      <span className="text-500 text-[10px] uppercase tracking-wider mr-2">
                         target
                       </span>
-                      <span className="text-cream-300">
+                      <span className="text-fg-300">
                         {s.comparison} {formatThreshold(s)}
                       </span>
                     </div>
                     <div className="text-right">
                       {history.length > 0 && (
-                        <span className="text-cream-500 text-[11px]">
+                        <span className="text-500 text-[11px]">
                           last {history.length} eval{history.length === 1 ? "" : "s"}
                           {" · "}
                           {fmtRelative(history[0].evaluated_at)}
@@ -167,7 +167,7 @@ export function SLOPage() {
                   </div>
 
                   {s.notes && (
-                    <div className="mt-3 font-mono text-[11px] text-cream-500 italic">
+                    <div className="mt-3 font-mono text-[11px] text-500 italic">
                       {s.notes}
                     </div>
                   )}

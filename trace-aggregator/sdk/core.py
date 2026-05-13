@@ -376,6 +376,13 @@ def build_span(
         meta["input_state_keys"] = list(user_state.keys())
         if isinstance(result, dict):
             meta["output_state_keys"] = [k for k in result if not str(k).startswith("_")]
+            output_vals = {
+                k: truncate_text(str(v), 2000)
+                for k, v in result.items()
+                if not str(k).startswith("_") and isinstance(v, str) and v
+            }
+            if output_vals:
+                meta["output"] = output_vals
 
     input_text = state.get(INPUT_TEXT_KEY)
     if input_text:

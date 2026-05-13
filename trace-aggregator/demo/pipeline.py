@@ -21,10 +21,14 @@ from __future__ import annotations
 import json
 import os
 import random
+import ssl
 import time
 import urllib.error
 import urllib.request
 from typing import Annotated, Any, Dict, List, TypedDict
+
+import certifi
+_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 from langgraph.graph import StateGraph, END
 
@@ -126,7 +130,7 @@ def _call_openai_compatible(prompt: str, *, system: str = "You are a helpful age
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SEC) as resp:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SEC, context=_SSL_CTX) as resp:
             raw = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
@@ -152,11 +156,15 @@ def _agent_llm(prompt: str, *, system: str) -> Dict[str, Any]:
 
 
 def _decision_prompt(state: AgentState) -> str:
+    task = (state or {}).get("_input_text") or "unknown task"
+    has_research = bool((state or {}).get("research_findings"))
+    has_code = bool((state or {}).get("code"))
     return (
         "You are deciding the next branch for a reviewer agent.\n"
         "Return ONLY compact JSON with keys: selected_candidate_id, confidence, rationale_summary, "
         "evidence_refs (array), candidates (array of objects with candidate_id,candidate_type,score,reason).\n"
-        f"Context keys present: {list((state or {}).keys())}\n"
+        f"Task: {task}\n"
+        f"research_findings present: {has_research}, code present: {has_code}\n"
         "Candidates: review, request_rework."
     )
 
@@ -233,16 +241,17 @@ def _maybe_emit_decision(
 
 @instrument_node("orchestrator")
 def orchestrator(state: AgentState) -> Dict[str, Any]:
+    task = state.get("_input_text") or "unknown task"
     if DEMO_MODE:
         reasoning = (
-            "I have two independent tasks: market research and code generation. "
-            "Neither depends on the other, so I'll fan out in parallel to minimize "
-            "wall-clock time. Once both complete, the reviewer can cross-check."
+            f"Task received: '{task}'. It has two independent parts — research and code — "
+            "so I'll fan out in parallel to minimise wall-clock time. "
+            "Once both complete, the reviewer can cross-check."
         )
         tok = _mock_llm((0.05, 0.15), (50, 100))
     else:
         res = _agent_llm(
-            "Create a concise execution plan: run research and code in parallel, then review.",
+            f"Task: {task}\nCreate a concise execution plan: run research and code in parallel, then review.",
             system="You are an orchestrator agent for software workflow planning.",
         )
         reasoning = (res.get("content") or "")[:400]
@@ -254,8 +263,8 @@ def orchestrator(state: AgentState) -> Dict[str, Any]:
             "decision_type": "agent_handoff",
             "selected_candidate_id": "parallel_research_coder",
             "confidence": 0.9 if DEMO_MODE else 0.78,
-            "rationale_summary": "Dispatch research and coding in parallel to reduce total turnaround.",
-            "evidence_refs": ["workflow=parallel_fanout", "goal=minimize_latency"],
+            "rationale_summary": f"Dispatch parallel research+code for: {task[:120]}",
+            "evidence_refs": ["workflow=parallel_fanout", "goal=minimize_latency", f"task={task[:80]}"],
             "candidates": [
                 {
                     "candidate_id": "parallel_research_coder",
@@ -282,11 +291,11 @@ def orchestrator(state: AgentState) -> Dict[str, Any]:
 
 @instrument_node("research_agent")
 def research(state: AgentState) -> Dict[str, Any]:
+    task = state.get("_input_text") or "unknown task"
     if DEMO_MODE:
         reasoning = (
-            "The task requires market analysis. I'll use the LLM to synthesize "
-            "concise findings that downstream agents — the coder and reviewer — "
-            "can consume without re-querying."
+            f"Task: '{task}'. I'll synthesise concise findings so the coder and reviewer "
+            "can consume them without re-querying."
         )
     else:
         reasoning = ""
@@ -297,8 +306,8 @@ def research(state: AgentState) -> Dict[str, Any]:
             "decision_type": "tool_select",
             "selected_candidate_id": "llm_research_summary",
             "confidence": 0.86 if DEMO_MODE else 0.73,
-            "rationale_summary": "Generate concise market findings for downstream coding and review.",
-            "evidence_refs": ["task=market_analysis"],
+            "rationale_summary": f"Synthesise research findings for: {task[:120]}",
+            "evidence_refs": [f"task={task[:80]}"],
             "candidates": [
                 {
                     "candidate_id": "llm_research_summary",
@@ -330,11 +339,11 @@ def research(state: AgentState) -> Dict[str, Any]:
 
 @instrument_node("coder_agent")
 def coder(state: AgentState) -> Dict[str, Any]:
+    task = state.get("_input_text") or "unknown task"
     if DEMO_MODE:
         reasoning = (
-            "I need to produce a code artifact. The spec asks for a Python function, "
-            "so I'll generate a candidate implementation. The reviewer will validate "
-            "correctness before it ships."
+            f"Task: '{task}'. I'll generate a candidate implementation; "
+            "the reviewer will validate correctness before it ships."
         )
     else:
         reasoning = ""
@@ -345,8 +354,8 @@ def coder(state: AgentState) -> Dict[str, Any]:
             "decision_type": "tool_select",
             "selected_candidate_id": "write_python_function",
             "confidence": 0.79 if DEMO_MODE else 0.69,
-            "rationale_summary": "Generate candidate implementation before reviewer validation.",
-            "evidence_refs": ["task=produce_code_artifact"],
+            "rationale_summary": f"Generate code implementation for: {task[:120]}",
+            "evidence_refs": [f"task={task[:80]}"],
             "candidates": [
                 {
                     "candidate_id": "write_python_function",
@@ -375,8 +384,8 @@ def coder(state: AgentState) -> Dict[str, Any]:
                 "decision_type": "route_branch",
                 "selected_candidate_id": "error_halt",
                 "confidence": 1.0,
-                "rationale_summary": "Reject: hallucinated import detected; halting execution.",
-                "evidence_refs": ["error=hallucinated_import"],
+                "rationale_summary": f"Reject: hallucinated import while coding '{task[:80]}'; halting execution.",
+                "evidence_refs": ["error=hallucinated_import", f"task={task[:80]}"],
                 "candidates": [
                     {
                         "candidate_id": "error_halt",
@@ -399,13 +408,15 @@ def coder(state: AgentState) -> Dict[str, Any]:
 
 @instrument_node("reviewer_agent")
 def reviewer(state: AgentState) -> Dict[str, Any]:
+    task = state.get("_input_text") or "unknown task"
     decision = _decision_from_llm(state)
     if DEMO_MODE:
         reasoning = (
-            "Both the research findings and the code artifact have arrived. "
-            "I'll cross-check the code against the research context and verify "
-            "correctness before approving."
+            f"Task: '{task}'. Both research findings and code artifact have arrived. "
+            "I'll cross-check the code against the research context before approving."
         )
+        decision["rationale_summary"] = f"Approve: research and code outputs satisfy '{task[:100]}'"
+        decision["evidence_refs"] = ["research_findings", "code", f"task={task[:80]}"]
     else:
         reasoning = str(decision.get("rationale_summary", ""))[:400]
     _maybe_emit_decision(
@@ -485,14 +496,17 @@ def run_once(task: str = "") -> None:
         print(f"  task: {task}")
     try:
         final = app.invoke(state)
-        print(f"✓ Pipeline finished. Messages: {final.get('messages')}")
+        print(f"✓ Pipeline finished.")
+        print(f"  research : {final.get('research_findings')}")
+        print(f"  code     : {final.get('code')}")
+        print(f"  review   : {final.get('review')}")
     except Exception as e:
         print(f"✗ Pipeline raised: {type(e).__name__}: {e}")
     time.sleep(0.5)
 
 
 def main():
-    n = 5
+    n = 1
     print(f"Running {n} pipeline executions... mode={'demo' if DEMO_MODE else 'real'} model={OPENAI_MODEL if not DEMO_MODE else 'mock'}")
     for i in range(n):
         print(f"\n--- Run {i + 1}/{n} ---")

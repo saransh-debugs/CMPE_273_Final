@@ -43,7 +43,7 @@ export function DecisionChain({
   onSelectDecision,
 }: Props) {
   if (!decisions.length) {
-    return <div className="font-mono text-[12px] text-cream-500">No decision events captured for this trace.</div>;
+    return <div className="font-mono text-[12px] text-500">No decision events captured for this trace.</div>;
   }
   const impact = impactByDecision(rootCause);
 
@@ -58,32 +58,32 @@ export function DecisionChain({
             type="button"
             onClick={() => onSelectDecision?.(selected ? null : d.decision_id)}
             className={`w-full text-left hairline rounded-sm p-4 bg-ink-700/20 transition-colors ${
-              selected ? "border-cream-300/50 bg-ink-700/45" : "hover:bg-ink-700/35"
+              selected ? "border-fg-300/50 bg-ink-700/45" : "hover:bg-ink-700/35"
             }`}
           >
             <div className="flex justify-between items-center mb-2">
-              <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-cream-400">
+              <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-fg-400">
                 {d.actor_agent_id} {"->"} {d.selected_candidate_id || "unknown"}
               </div>
-              <div className="font-mono text-[10px] text-cream-500">
+              <div className="font-mono text-[10px] text-500">
                 {d.decision_type} | conf {Math.round(d.confidence * 100)}%
               </div>
             </div>
-            <div className="font-display italic text-[17px] text-cream-100 mb-2">{d.rationale_summary || "No rationale provided."}</div>
+            <div className="font-display italic text-[17px] text-fg-100 mb-2">{d.rationale_summary || "No rationale provided."}</div>
             {parseReasoning(d) && (
-              <div className="mb-2 pl-3 border-l-2 border-cream-700/40 font-mono text-[11px] leading-relaxed text-cream-400 italic">
-                <span className="text-cream-500 not-italic">{d.actor_agent_id}:</span>{" "}
+              <div className="mb-2 pl-3 border-l-2 border-fg-700/40 font-mono text-[11px] leading-relaxed text-fg-400 italic">
+                <span className="text-500 not-italic">{d.actor_agent_id}:</span>{" "}
                 &ldquo;{parseReasoning(d)}&rdquo;
               </div>
             )}
-            <div className="font-mono text-[11px] text-cream-500">
+            <div className="font-mono text-[11px] text-500">
               evidence: {d.evidence_refs.length ? d.evidence_refs.join(", ") : "none"}
             </div>
-            <div className="mt-2 font-mono text-[11px] text-cream-400">
+            <div className="mt-2 font-mono text-[11px] text-fg-400">
               impact: {i ? `${fmtMs(i.latency)} | ${i.tokens}t | ${i.errors} errors | ${i.targets.size} targets` : "pending reconstruction"}
             </div>
             {rootCause.find((r) => r.decision_id === d.decision_id) && (
-              <div className="mt-1 font-mono text-[10px] text-cream-500">
+              <div className="mt-1 font-mono text-[10px] text-500">
                 score {rootCause.find((r) => r.decision_id === d.decision_id)?.impact_score.toFixed(2)} ·
                 uncertainty {rootCause.find((r) => r.decision_id === d.decision_id)?.uncertainty}
               </div>

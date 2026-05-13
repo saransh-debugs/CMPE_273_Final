@@ -1,10 +1,10 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  content: ["./index.html", "./src/**/*.{ts,tsx,css}"],
   theme: {
     extend: {
       colors: {
-        // Parchment-on-charcoal palette
+        // Editorial charcoal base
         ink: {
           900: "#0F0E0C",   // base background — warm near-black
           800: "#15130F",
@@ -12,12 +12,13 @@ export default {
           600: "#221E19",   // surface elevated
           500: "#2A2521",   // hairline / divider
         },
-        cream: {
-          50: "#F5F1E8",    // primary text — warm parchment
-          100: "#E8E2D4",
-          300: "#A8A299",   // secondary
-          500: "#6B6760",   // muted
-          700: "#3A3833",   // deep muted
+        // Foreground neutrals (primary body uses `text-white`; steps are cool grays)
+        fg: {
+          100: "#E4E4E7",
+          300: "#A1A1AA",
+          400: "#8D8D95",
+          500: "#71717A",
+          700: "#52525B",
         },
         // The accent — single cherry red, used for emphasis + high-blame
         cherry: {

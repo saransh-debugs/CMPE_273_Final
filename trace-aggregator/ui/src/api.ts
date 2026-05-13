@@ -5,6 +5,7 @@ import type {
   GlobalBlameResponse,
   DecisionEvent,
   RootCauseEdge,
+  RawSpan,
   SLOResponse,
   Incident,
   IncidentListResponse,
@@ -37,6 +38,7 @@ export const api = {
     return get<TraceListResponse>(`/traces?${params}`);
   },
   getTrace: (id: string) => get<TraceDetail>(`/traces/${id}`),
+  getSpans: (id: string) => get<RawSpan[]>(`/traces/${id}/spans`),
   getDecisions: (id: string) =>
     get<DecisionEvent[]>(`/traces/${id}/decisions`),
   getRootCause: (id: string) =>
