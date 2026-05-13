@@ -82,8 +82,13 @@ class Decision:
 
 
 def _connect():
+    host = os.environ.get("CLICKHOUSE_HOST", "localhost")
+    port = int(os.environ.get("CLICKHOUSE_PORT", "8123"))
     return clickhouse_connect.get_client(
-        host="localhost", port=8123, username="default", password=""
+        host=host,
+        port=port,
+        username=os.environ.get("CLICKHOUSE_USER", "default"),
+        password=os.environ.get("CLICKHOUSE_PASSWORD", ""),
     )
 
 

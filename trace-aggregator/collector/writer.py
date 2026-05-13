@@ -70,8 +70,8 @@ class BatchWriter:
         table: str = "tracing.raw_spans",
         columns: Sequence[str] = SPAN_COLUMNS,
         item_name: str = "span",
-        host: str = "localhost",
-        port: int = 8123,
+        host: str = os.environ.get("CLICKHOUSE_HOST", "localhost"),
+        port: int = int(os.environ.get("CLICKHOUSE_PORT", "8123")),
     ):
         self.table = table
         self.columns = list(columns)
@@ -95,8 +95,13 @@ class BatchWriter:
 
     def _connect(self):
         if self._client is None:
+            host = os.environ.get("CLICKHOUSE_HOST", self.host)
+            port = int(os.environ.get("CLICKHOUSE_PORT", str(self.port)))
             self._client = clickhouse_connect.get_client(
-                host=self.host, port=self.port, username="default", password=""
+                host=host,
+                port=port,
+                username=os.environ.get("CLICKHOUSE_USER", "default"),
+                password=os.environ.get("CLICKHOUSE_PASSWORD", ""),
             )
         return self._client
 

@@ -6,6 +6,7 @@ Usage:
 """
 import sys
 import time
+import os
 
 import clickhouse_connect
 from clickhouse_connect.driver.exceptions import OperationalError
@@ -19,9 +20,18 @@ CONNECT_RETRIES = 20
 RETRY_DELAY_SEC = 1.5
 RETENTION_DAYS = retention_days()
 
+CLICKHOUSE_HOST = os.environ.get("CLICKHOUSE_HOST", CLICKHOUSE_HOST)
+CLICKHOUSE_PORT = int(os.environ.get("CLICKHOUSE_PORT", str(CLICKHOUSE_PORT)))
+
+
+def _ttl_expr(expr: str, days: int) -> str:
+    # ClickHouse 24.3 requires TTL expressions to evaluate to Date/DateTime.
+    # Some timestamp columns here are DateTime64(3), so cast before applying TTL.
+    return f"toDateTime({expr}) + INTERVAL {days} DAY"
+
 
 def _ttl(expr: str, days: int) -> str:
-    return f"TTL {expr} + INTERVAL {days} DAY"
+    return f"TTL {_ttl_expr(expr, days)}"
 
 
 def get_client(retries: int = CONNECT_RETRIES):
@@ -32,8 +42,8 @@ def get_client(retries: int = CONNECT_RETRIES):
             client = clickhouse_connect.get_client(
                 host=CLICKHOUSE_HOST,
                 port=CLICKHOUSE_PORT,
-                username="default",
-                password="",
+                username=os.environ.get("CLICKHOUSE_USER", "default"),
+                password=os.environ.get("CLICKHOUSE_PASSWORD", ""),
             )
             client.command("SELECT 1")
             return client
@@ -228,13 +238,13 @@ def governance_migration_statements() -> list[str]:
     """Return idempotent ALTER statements for retention policy enforcement."""
 
     return [
-        f"ALTER TABLE tracing.raw_spans MODIFY TTL {_ttl('ingested_at', RETENTION_DAYS['raw'])}",
-        f"ALTER TABLE tracing.raw_decisions MODIFY TTL {_ttl('ingested_at', RETENTION_DAYS['raw'])}",
-        f"ALTER TABLE tracing.reconstructed_traces MODIFY TTL {_ttl('reconstructed_at', RETENTION_DAYS['reconstructed'])}",
-        f"ALTER TABLE tracing.decision_edges MODIFY TTL {_ttl('reconstructed_at', RETENTION_DAYS['derived'])}",
-        f"ALTER TABLE tracing.decision_reason_chains MODIFY TTL {_ttl('reconstructed_at', RETENTION_DAYS['derived'])}",
-        f"ALTER TABLE tracing.slo_status MODIFY TTL {_ttl('evaluated_at', RETENTION_DAYS['slo'])}",
-        f"ALTER TABLE tracing.incidents MODIFY TTL {_ttl('updated_at', RETENTION_DAYS['incidents'])}",
+        f"ALTER TABLE tracing.raw_spans MODIFY TTL {_ttl_expr('ingested_at', RETENTION_DAYS['raw'])}",
+        f"ALTER TABLE tracing.raw_decisions MODIFY TTL {_ttl_expr('ingested_at', RETENTION_DAYS['raw'])}",
+        f"ALTER TABLE tracing.reconstructed_traces MODIFY TTL {_ttl_expr('reconstructed_at', RETENTION_DAYS['reconstructed'])}",
+        f"ALTER TABLE tracing.decision_edges MODIFY TTL {_ttl_expr('reconstructed_at', RETENTION_DAYS['derived'])}",
+        f"ALTER TABLE tracing.decision_reason_chains MODIFY TTL {_ttl_expr('reconstructed_at', RETENTION_DAYS['derived'])}",
+        f"ALTER TABLE tracing.slo_status MODIFY TTL {_ttl_expr('evaluated_at', RETENTION_DAYS['slo'])}",
+        f"ALTER TABLE tracing.incidents MODIFY TTL {_ttl_expr('updated_at', RETENTION_DAYS['incidents'])}",
     ]
 
 

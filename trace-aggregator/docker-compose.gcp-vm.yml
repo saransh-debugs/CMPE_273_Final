@@ -1,0 +1,110 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    container_name: trace_aggregator_db
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      CLICKHOUSE_DB: tracing
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  init-db:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    command: ["python", "-m", "db.init_db"]
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+    restart: "no"
+
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "50051:50051"
+      - "9090:9090"
+    environment:
+      PYTHONPATH: /app:/app/generated
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      TRACE_COLLECTOR_BIND: "[::]:50051"
+      METRICS_BIND_HOST: 0.0.0.0
+      METRICS_BIND_PORT: 9090
+      TRACE_TENANT_KEYS: ${TRACE_TENANT_KEYS:-}
+
+  engine:
+    build:
+      context: .
+      dockerfile: Dockerfile.engine
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      ENGINE_RECON_MAX_WORKERS: 4
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "8000:8080"
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      TRACE_CORS_ORIGINS: "*"
+
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui.vm
+      args:
+        VITE_API_BASE_URL: /api
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "80:8080"
+
+volumes:
+  clickhouse_data:

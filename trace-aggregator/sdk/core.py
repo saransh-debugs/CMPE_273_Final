@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Tuple
 from pydantic import BaseModel, Field, ValidationError
 
 from generated import tracing_pb2
-from shared.governance import add_redact_key, normalize_metadata_payload, redact_sensitive
+from shared.governance import _REDACT_PATTERNS, add_redact_key, normalize_metadata_payload, redact_sensitive
 from shared.trace_auth import DEFAULT_TENANT_ID
 
 METADATA_CHAR_LIMIT = 4_000

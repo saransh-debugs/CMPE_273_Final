@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . .
+RUN python -m grpc_tools.protoc -I proto --python_out=generated --grpc_python_out=generated proto/tracing.proto
+
+EXPOSE 50051 9090
+
+CMD ["python", "-m", "collector.server"]

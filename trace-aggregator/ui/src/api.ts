@@ -11,8 +11,8 @@ import type {
   IncidentState,
 } from "./types";
 
-// Vite proxies /api/* to the FastAPI server in dev (see vite.config.ts).
-const BASE = "/api";
+// In dev, this defaults to /api (Vite proxy). In Cloud Run, set VITE_API_BASE_URL.
+const BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`);
