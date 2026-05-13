@@ -20,6 +20,7 @@ from generated import tracing_pb2, tracing_pb2_grpc
 from .metrics import METRICS
 from .metrics_server import start_metrics_server
 from .writer import BatchWriter
+from shared.governance import normalize_metadata_payload, truncate_text
 from shared.trace_auth import AuthError, resolve_request_tenant
 
 _logger = logging.getLogger("collector.server")
@@ -44,15 +45,13 @@ DECISION_COLUMNS = [
 ]
 
 
-def _span_to_row(s: tracing_pb2.AgentSpan) -> tuple:
+def _span_to_row(s: tracing_pb2.AgentSpan, tenant_id: str) -> tuple:
     """Map a Protobuf span to a tuple matching writer.COLUMNS."""
     # ClickHouse Map(String, UInt32) maps from a Python dict.
     vc = {k: int(v) for k, v in s.vector_clock.items()}
-    tenant_id = "default"
-    try:
-        tenant_id = str(json.loads(s.metadata or "{}").get("tenant_id") or tenant_id)
-    except Exception:
-        pass
+    meta = normalize_metadata_payload(s.metadata or {"tenant_id": tenant_id})
+    if isinstance(meta, dict):
+        meta["tenant_id"] = tenant_id
     return (
         tenant_id,
         int(s.start_time_ms),
@@ -65,12 +64,12 @@ def _span_to_row(s: tracing_pb2.AgentSpan) -> tuple:
         int(s.input_tokens),
         int(s.output_tokens),
         int(s.latency_ms),
-        s.metadata,
+        truncate_text(json.dumps(meta, default=str)),
         f"{s.trace_id}:{s.span_id}",
     )
 
 
-def _decision_to_row(d: tracing_pb2.DecisionEvent) -> tuple:
+def _decision_to_row(d: tracing_pb2.DecisionEvent, tenant_id: str) -> tuple:
     candidates = [
         {
             "candidate_id": c.candidate_id,
@@ -80,11 +79,9 @@ def _decision_to_row(d: tracing_pb2.DecisionEvent) -> tuple:
         }
         for c in d.candidates
     ]
-    tenant_id = "default"
-    try:
-        tenant_id = str(json.loads(d.metadata or "{}").get("tenant_id") or tenant_id)
-    except Exception:
-        pass
+    meta = normalize_metadata_payload(d.metadata or {"tenant_id": tenant_id})
+    if isinstance(meta, dict):
+        meta["tenant_id"] = tenant_id
     return (
         tenant_id,
         int(d.timestamp_ms),
@@ -98,7 +95,7 @@ def _decision_to_row(d: tracing_pb2.DecisionEvent) -> tuple:
         d.rationale_summary,
         list(d.evidence_refs),
         json.dumps(candidates, default=str),
-        d.metadata,
+        truncate_text(json.dumps(meta, default=str)),
         f"{d.trace_id}:{d.decision_id}",
     )
 
@@ -128,7 +125,7 @@ class TraceCollectorServicer(tracing_pb2_grpc.TraceCollectorServicer):
             await context.abort(grpc.StatusCode.UNAUTHENTICATED, str(e))
         if not request.metadata:
             request.metadata = json.dumps({"tenant_id": tenant_id})
-        accepted = self.span_writer.submit_nowait(_span_to_row(request))
+        accepted = self.span_writer.submit_nowait(_span_to_row(request, tenant_id))
         self._span_received += 1
         METRICS.inc_span_received()
         if not accepted:
@@ -155,7 +152,7 @@ class TraceCollectorServicer(tracing_pb2_grpc.TraceCollectorServicer):
                 span.metadata = json.dumps({"tenant_id": tenant_id})
             self._span_received += 1
             METRICS.inc_span_received()
-            if self.span_writer.submit_nowait(_span_to_row(span)):
+            if self.span_writer.submit_nowait(_span_to_row(span, tenant_id)):
                 n += 1
             else:
                 self._span_dropped += 1
@@ -173,7 +170,7 @@ class TraceCollectorServicer(tracing_pb2_grpc.TraceCollectorServicer):
             await context.abort(grpc.StatusCode.UNAUTHENTICATED, str(e))
         if not request.metadata:
             request.metadata = json.dumps({"tenant_id": tenant_id})
-        accepted = self.decision_writer.submit_nowait(_decision_to_row(request))
+        accepted = self.decision_writer.submit_nowait(_decision_to_row(request, tenant_id))
         self._decision_received += 1
         METRICS.inc_decision_received()
         if not accepted:
@@ -200,7 +197,7 @@ class TraceCollectorServicer(tracing_pb2_grpc.TraceCollectorServicer):
                 decision.metadata = json.dumps({"tenant_id": tenant_id})
             self._decision_received += 1
             METRICS.inc_decision_received()
-            if self.decision_writer.submit_nowait(_decision_to_row(decision)):
+            if self.decision_writer.submit_nowait(_decision_to_row(decision, tenant_id)):
                 n += 1
             else:
                 self._decision_dropped += 1

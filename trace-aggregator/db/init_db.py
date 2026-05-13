@@ -10,11 +10,18 @@ import time
 import clickhouse_connect
 from clickhouse_connect.driver.exceptions import OperationalError
 
+from shared.governance import retention_days
+
 
 CLICKHOUSE_HOST = "localhost"
 CLICKHOUSE_PORT = 8123
 CONNECT_RETRIES = 20
 RETRY_DELAY_SEC = 1.5
+RETENTION_DAYS = retention_days()
+
+
+def _ttl(expr: str, days: int) -> str:
+    return f"TTL {expr} + INTERVAL {days} DAY"
 
 
 def get_client(retries: int = CONNECT_RETRIES):
@@ -64,7 +71,8 @@ CREATE TABLE IF NOT EXISTS tracing.raw_spans (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(ingested_at)
 ORDER BY (tenant_id, trace_id, start_time_ms, span_id)
-"""
+__TTL__
+""".replace("__TTL__", _ttl("ingested_at", RETENTION_DAYS["raw"]))
 
 SCHEMA_RECONSTRUCTED_TRACES = """
 CREATE TABLE IF NOT EXISTS tracing.reconstructed_traces (
@@ -96,7 +104,8 @@ CREATE TABLE IF NOT EXISTS tracing.reconstructed_traces (
     first_reconstructed_at DateTime64(3) DEFAULT toDateTime64(0, 3, 'UTC')
 ) ENGINE = ReplacingMergeTree(reconstructed_at)
 ORDER BY (tenant_id, trace_id)
-"""
+__TTL__
+""".replace("__TTL__", _ttl("reconstructed_at", RETENTION_DAYS["reconstructed"]))
 
 SCHEMA_RAW_DECISIONS = """
 CREATE TABLE IF NOT EXISTS tracing.raw_decisions (
@@ -121,7 +130,8 @@ CREATE TABLE IF NOT EXISTS tracing.raw_decisions (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(ingested_at)
 ORDER BY (tenant_id, trace_id, timestamp_ms, decision_id)
-"""
+__TTL__
+""".replace("__TTL__", _ttl("ingested_at", RETENTION_DAYS["raw"]))
 
 SCHEMA_DECISION_EDGES = """
 CREATE TABLE IF NOT EXISTS tracing.decision_edges (
@@ -144,7 +154,8 @@ CREATE TABLE IF NOT EXISTS tracing.decision_edges (
     reconstructed_at DateTime64(3) DEFAULT now64(3)
 ) ENGINE = ReplacingMergeTree(reconstructed_at)
 ORDER BY (tenant_id, trace_id, decision_id, target_span_id)
-"""
+__TTL__
+""".replace("__TTL__", _ttl("reconstructed_at", RETENTION_DAYS["derived"]))
 
 SCHEMA_SLO_STATUS = """
 CREATE TABLE IF NOT EXISTS tracing.slo_status (
@@ -162,7 +173,8 @@ CREATE TABLE IF NOT EXISTS tracing.slo_status (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(evaluated_at)
 ORDER BY (slo_name, evaluated_at)
-"""
+__TTL__
+""".replace("__TTL__", _ttl("evaluated_at", RETENTION_DAYS["slo"]))
 
 SCHEMA_INCIDENTS = """
 CREATE TABLE IF NOT EXISTS tracing.incidents (
@@ -181,7 +193,8 @@ CREATE TABLE IF NOT EXISTS tracing.incidents (
 ) ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY toYYYYMM(opened_at)
 ORDER BY incident_key
-"""
+__TTL__
+""".replace("__TTL__", _ttl("updated_at", RETENTION_DAYS["incidents"]))
 
 SCHEMA_DECISION_REASON_CHAINS = """
 CREATE TABLE IF NOT EXISTS tracing.decision_reason_chains (
@@ -207,7 +220,28 @@ CREATE TABLE IF NOT EXISTS tracing.decision_reason_chains (
     reconstructed_at DateTime64(3) DEFAULT now64(3)
 ) ENGINE = ReplacingMergeTree(reconstructed_at)
 ORDER BY (tenant_id, trace_id, decision_id, chain_rank, target_span_id)
-"""
+__TTL__
+""".replace("__TTL__", _ttl("reconstructed_at", RETENTION_DAYS["derived"]))
+
+
+def governance_migration_statements() -> list[str]:
+    """Return idempotent ALTER statements for retention policy enforcement."""
+
+    return [
+        f"ALTER TABLE tracing.raw_spans MODIFY TTL {_ttl('ingested_at', RETENTION_DAYS['raw'])}",
+        f"ALTER TABLE tracing.raw_decisions MODIFY TTL {_ttl('ingested_at', RETENTION_DAYS['raw'])}",
+        f"ALTER TABLE tracing.reconstructed_traces MODIFY TTL {_ttl('reconstructed_at', RETENTION_DAYS['reconstructed'])}",
+        f"ALTER TABLE tracing.decision_edges MODIFY TTL {_ttl('reconstructed_at', RETENTION_DAYS['derived'])}",
+        f"ALTER TABLE tracing.decision_reason_chains MODIFY TTL {_ttl('reconstructed_at', RETENTION_DAYS['derived'])}",
+        f"ALTER TABLE tracing.slo_status MODIFY TTL {_ttl('evaluated_at', RETENTION_DAYS['slo'])}",
+        f"ALTER TABLE tracing.incidents MODIFY TTL {_ttl('updated_at', RETENTION_DAYS['incidents'])}",
+    ]
+
+
+def apply_governance_policies(client) -> None:
+    print("→ Applying retention TTL policies...")
+    for stmt in governance_migration_statements():
+        client.command(stmt)
 
 
 def setup() -> None:
@@ -239,6 +273,8 @@ def setup() -> None:
     print("→ Creating incidents table...")
     client.command(SCHEMA_INCIDENTS)
 
+    apply_governance_policies(client)
+
     print("→ Ensuring input_text column on reconstructed_traces...")
     try:
         client.command("ALTER TABLE tracing.reconstructed_traces ADD COLUMN IF NOT EXISTS input_text String DEFAULT ''")
@@ -267,14 +303,14 @@ def setup() -> None:
     except Exception:
         pass
 
-    print("→ Ensuring blame_v2_json column on reconstructed_traces...")    # ← NEW
-    try:                                                                    # ← NEW
-        client.command(                                                     # ← NEW
-            "ALTER TABLE tracing.reconstructed_traces "                     # ← NEW
-            "ADD COLUMN IF NOT EXISTS blame_v2_json String DEFAULT '[]'"    # ← NEW
-        )                                                                   # ← NEW
-    except Exception:                                                       # ← NEW
-        pass    
+    print("→ Ensuring blame_v2_json column on reconstructed_traces...")
+    try:
+        client.command(
+            "ALTER TABLE tracing.reconstructed_traces "
+            "ADD COLUMN IF NOT EXISTS blame_v2_json String DEFAULT '[]'"
+        )
+    except Exception:
+        pass
     print("→ Ensuring idempotency_key columns on raw tables...")
     try:
         client.command("ALTER TABLE tracing.raw_spans ADD COLUMN IF NOT EXISTS idempotency_key String DEFAULT ''")

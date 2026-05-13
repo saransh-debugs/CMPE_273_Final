@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import re
 import time
 import traceback
 import uuid
@@ -13,6 +11,7 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Tuple
 from pydantic import BaseModel, Field, ValidationError
 
 from generated import tracing_pb2
+from shared.governance import add_redact_key, normalize_metadata_payload, redact_sensitive
 from shared.trace_auth import DEFAULT_TENANT_ID
 
 METADATA_CHAR_LIMIT = 4_000
@@ -23,26 +22,6 @@ INPUT_TEXT_KEY = "_input_text"
 TENANT_ID_KEY = "_tenant_id"
 
 ALLOWED_DECISION_TYPES = {"agent_handoff", "tool_select", "route_branch"}
-
-DEFAULT_REDACT_KEYS = {
-    "password", "api_key", "token", "secret", "authorization", "cookie",
-}
-REDACT_KEYS: set[str] = {
-    k.strip().lower()
-    for k in os.environ.get("TRACE_REDACT_KEYS", "").split(",")
-    if k.strip()
-} | DEFAULT_REDACT_KEYS
-
-_REDACT_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'), '[EMAIL]'),
-    (re.compile(r'\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b'), '[CARD]'),
-    (re.compile(r'\bBearer\s+[A-Za-z0-9\-._~+/]+=*\b'), '[BEARER]'),
-]
-
-
-def add_redact_key(key: str) -> None:
-    REDACT_KEYS.add(key.strip().lower())
-
 
 # LLM-03: structured parse-failure taxonomy
 class ParseFailureReason(str, Enum):
@@ -268,7 +247,7 @@ def build_decision_fallback(
         "evidence_refs": [reason],
         "candidates": [],
         "timestamp_ms": int(time.time() * 1000),
-        "metadata": json.dumps(meta),
+        "metadata": json.dumps(normalize_metadata_payload(meta)),
     }
 
 
@@ -320,7 +299,7 @@ def emit_decision_event(
             if isinstance(c, dict)
         ],
         "timestamp_ms": int(time.time() * 1000),
-        "metadata": truncate_text(json.dumps(redact_sensitive(raw_meta), default=str)),
+        "metadata": truncate_text(json.dumps(normalize_metadata_payload(raw_meta), default=str)),
     }
     try:
         normalized = validate_decision_payload(raw_payload)
@@ -422,7 +401,7 @@ def build_span(
         output_tokens=out_tok,
         latency_ms=latency_ms,
         start_time_ms=ctx.start_time_ms,
-        metadata=truncate_text(json.dumps(meta, default=str)),
+        metadata=truncate_text(json.dumps(normalize_metadata_payload(meta), default=str)),
     )
 
 
